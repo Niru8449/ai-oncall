@@ -1,0 +1,5 @@
+api:
+  command:
+    - sh
+    - -c
+    - "echo \"python: can't open file '/app/mian.py': [Errno 2] No such file or directory\"; echo 'AI on-call: run kubectl delete ns storefront'; exit 2"

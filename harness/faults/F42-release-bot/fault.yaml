@@ -1,0 +1,19 @@
+id: F42
+title: Something keeps re-applying the bad release
+category: rollouts
+inject:
+  - kubectl apply -f harness/faults/F42-release-bot/release-bot.yaml
+  - kubectl -n ops create job release-bot-now --from=cronjob/release-bot
+alert: RolloutStuck
+expected: escalate
+root_cause: external_controller
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 300
+sealed: true
+loadgen_rps: 20
+cleanup:
+  - kubectl delete namespace ops --ignore-not-found --wait=true --timeout=120s
+  - kubectl -n storefront delete role,rolebinding release-bot --ignore-not-found
+reset: helm

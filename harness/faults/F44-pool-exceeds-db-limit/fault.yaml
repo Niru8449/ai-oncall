@@ -1,0 +1,17 @@
+id: F44
+title: Pool bigger than the database allows
+category: deps
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set postgres.maxConnections=10 --set api.env.DB_POOL_SIZE=20
+alert: default
+expected: propose
+root_cause: db_connections
+acceptable_actions:
+  - { tool: patch_env, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: true
+loadgen_rps: 120
+cleanup: []
+reset: helm

@@ -1,5 +1,5 @@
 image:
-  repository: storefront
+  repository: localhost:5000/storefront
   tag: dev
   pullPolicy: IfNotPresent
 
@@ -64,7 +64,7 @@ api:
 worker:
   replicas: 2
   env:
-    WORK_MS: "20"
+    WORK_MS: "8"
     TMP_KEEP: "100"
     TMP_FILE_KB: "256"
     DB_HOST: postgres

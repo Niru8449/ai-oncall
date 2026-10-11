@@ -1,0 +1,17 @@
+id: F41
+title: Rollout stuck, old version still serving
+category: rollouts
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.env.STARTUP_DELAY_S=900 --set api.livenessProbe.initialDelaySeconds=1200
+alert: RolloutStuck
+expected: fix
+root_cause: rollout_stuck
+acceptable_actions:
+  - { tool: rollback, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

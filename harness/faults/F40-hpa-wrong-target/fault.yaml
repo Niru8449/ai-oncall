@@ -1,0 +1,19 @@
+id: F40
+title: Autoscaler targets the wrong Deployment
+category: rollouts
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.hpa.enabled=true --set api.hpa.minReplicas=3 --set api.hpa.maxReplicas=6
+  - kubectl -n storefront patch hpa api --type merge -p '{"spec":{"scaleTargetRef":{"name":"api-v2"}}}'
+  - kubectl -n storefront scale deploy/api --replicas=1
+alert: default
+expected: propose
+root_cause: hpa_target
+acceptable_actions:
+  - { tool: patch_hpa, target: hpa/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: true
+loadgen_rps: 120
+cleanup: []
+reset: helm

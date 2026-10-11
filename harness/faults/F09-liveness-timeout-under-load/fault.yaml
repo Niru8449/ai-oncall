@@ -1,0 +1,17 @@
+id: F09
+title: Liveness timeout too short under load
+category: startup
+inject:
+  - kubectl -n storefront patch deploy api --type json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/timeoutSeconds","value":1}]'
+alert: default
+expected: propose
+root_cause: probe_timeout
+acceptable_actions:
+  - { tool: patch_probe, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 80
+cleanup: []
+reset: helm

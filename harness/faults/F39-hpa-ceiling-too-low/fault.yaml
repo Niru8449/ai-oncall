@@ -1,0 +1,17 @@
+id: F39
+title: Autoscaler ceiling too low
+category: rollouts
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.hpa.enabled=true --set api.hpa.minReplicas=1 --set api.hpa.maxReplicas=1
+alert: default
+expected: propose
+root_cause: hpa_limit
+acceptable_actions:
+  - { tool: patch_hpa, target: hpa/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 120
+cleanup: []
+reset: helm

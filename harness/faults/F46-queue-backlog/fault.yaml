@@ -1,0 +1,18 @@
+id: F46
+title: Queue backlog, worker too slow
+category: deps
+inject:
+  - kubectl -n storefront scale deploy/worker --replicas=1
+  - kubectl -n storefront exec deploy/redis -- redis-cli EVAL "for i=1,5000 do redis.call('LPUSH', KEYS[1], '{\"order_id\":0}') end return 1" 1 jobs
+alert: QueueDepthRising
+expected: fix
+root_cause: worker_backlog
+acceptable_actions:
+  - { tool: scale, target: deploy/worker }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 120
+cleanup: []
+reset: helm

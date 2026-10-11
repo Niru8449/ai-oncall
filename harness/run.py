@@ -7,6 +7,7 @@ import random
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
@@ -26,7 +27,9 @@ MON_CHART = ROOT / "cluster" / "charts" / "kube-prometheus-stack-92.3.0.tgz"
 MON_VALUES = ROOT / "cluster" / "prometheus-values.yaml"
 MONITORING_DIR = ROOT / "monitoring"
 PROMETHEUS_STS = "prometheus-mon-kube-prometheus-stack-prometheus"
-IMAGE = "storefront:dev"
+IMAGE = "localhost:5000/storefront:dev"
+ANON_DOCKER_CONFIG = Path.home() / ".oncall" / "docker-anon"
+BUILDX_PLUGIN = Path.home() / ".docker" / "cli-plugins" / "docker-buildx"
 RUNS_DIR = ROOT / "reports" / "runs"
 DEFAULT_RPS = 20
 GREEN_TIMEOUT_S = 420
@@ -45,7 +48,7 @@ MON_ROLLOUTS = (
     "deployment/mon-kube-state-metrics",
     "daemonset/mon-prometheus-node-exporter",
 )
-HARNESS_ROLLOUTS = ("deployment/slo-probe", "deployment/loadgen")
+HARNESS_ROLLOUTS = ("daemonset/registry", "deployment/slo-probe", "deployment/loadgen")
 
 
 class HarnessError(Exception):
@@ -110,6 +113,7 @@ def reset_app(name, reset="helm", cleanup=()):
     kubectl(name, "-n", APP_NAMESPACE, "delete", "pods", "--field-selector=status.phase=Failed", "--ignore-not-found")
     for namespace, obj in APP_ROLLOUTS:
         kubectl(name, "-n", namespace, "rollout", "status", obj, ROLLOUT_TIMEOUT)
+    kubectl(name, "-n", APP_NAMESPACE, "exec", "deploy/redis", "--", "redis-cli", "DEL", "jobs")
 
 
 def set_loadgen(name, api, rps):
@@ -135,6 +139,47 @@ def wait_for_statefulset(api, namespace, sts_name, timeout_s=300):
         time.sleep(5)
 
 
+def anonymous_docker_env():
+    endpoint = sandbox.sh(["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], capture=True).strip()
+    plugins = ANON_DOCKER_CONFIG / "cli-plugins"
+    plugins.mkdir(parents=True, exist_ok=True)
+    config_file = ANON_DOCKER_CONFIG / "config.json"
+    if not config_file.exists():
+        config_file.write_text("{}\n")
+    link = plugins / BUILDX_PLUGIN.name
+    if BUILDX_PLUGIN.exists() and not link.exists():
+        link.symlink_to(BUILDX_PLUGIN)
+    env = {k: v for k, v in os.environ.items() if k not in ("DOCKER_CONFIG", "DOCKER_HOST", "DOCKER_CONTEXT")}
+    env.update(DOCKER_CONFIG=str(ANON_DOCKER_CONFIG), DOCKER_HOST=endpoint)
+    return env
+
+
+def prune_node_images(name):
+    for node in sandbox.sh(["kind", "get", "nodes", "--name", name], capture=True).split():
+        listing = subprocess.run(["docker", "exec", node, "ctr", "-n", "k8s.io", "images", "ls"], text=True, capture_output=True)
+        if listing.returncode != 0:
+            continue
+        refs_by_digest = {}
+        for line in listing.stdout.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) >= 3:
+                refs_by_digest.setdefault(fields[2], []).append(fields[0])
+        stale = [ref for refs in refs_by_digest.values() if all(r.startswith("import-") for r in refs) for ref in refs]
+        if stale:
+            subprocess.run(["docker", "exec", node, "ctr", "-n", "k8s.io", "images", "rm", *stale], capture_output=True)
+        print(f"  {node}: removed {len(stale)} unused image copies", flush=True)
+
+
+def build(name):
+    argv = ["docker", "build", "-t", IMAGE, str(ROOT / "demo-app")]
+    print(f"$ DOCKER_CONFIG={ANON_DOCKER_CONFIG} " + " ".join(argv), flush=True)
+    if subprocess.run(argv, env=anonymous_docker_env()).returncode != 0:
+        raise HarnessError("image build failed")
+    guard(name)
+    sandbox.sh(["kind", "load", "docker-image", IMAGE, "--name", name])
+    prune_node_images(name)
+
+
 def bootstrap(name):
     api = sandbox.admin_client(name)
     helm(name, "upgrade", "--install", MON_RELEASE, str(MON_CHART), "-n", MON_NAMESPACE, "--create-namespace", "-f", str(MON_VALUES))
@@ -156,6 +201,20 @@ def recreate(name):
     if not sandbox.create(name):
         raise HarnessError(f"sandbox {name!r} failed its checks after create")
     bootstrap(name)
+
+
+def wait_green(name):
+    api = sandbox.admin_client(name)
+    set_loadgen(name, api, DEFAULT_RPS)
+    return score.wait_for(score.Prometheus(api), True, GREEN_TIMEOUT_S)
+
+
+def reset_and_wait(name, spec):
+    if spec.needs_fresh_cluster:
+        recreate(name)
+    else:
+        reset_app(name, spec.reset, spec.cleanup)
+    return wait_green(name)
 
 
 def watch(prom, spec, timeout_s):
@@ -228,18 +287,21 @@ def run_fault(name, spec, mode):
     finally:
         row["reset"] = "fresh-cluster" if spec.needs_fresh_cluster else spec.reset
         try:
-            if spec.needs_fresh_cluster:
+            try:
+                after, waited = reset_and_wait(name, spec)
+                problem = None if after.healthy else after.reason
+            except Exception as exc:
+                after, waited, problem = None, None, f"{exc.__class__.__name__}: {exc}"
+            if problem and not spec.needs_fresh_cluster:
+                print(f"  reset did not recover the sandbox ({problem}); rebuilding it", file=sys.stderr, flush=True)
+                errors.append(f"reset did not recover the sandbox, rebuilt it: {problem}")
+                row["reset"] = f"{spec.reset} then fresh-cluster"
                 recreate(name)
-            else:
-                reset_app(name, spec.reset, spec.cleanup)
-            api = sandbox.admin_client(name)
-            prom = score.Prometheus(api)
-            set_loadgen(name, api, DEFAULT_RPS)
-            after, waited = score.wait_for(prom, True, GREEN_TIMEOUT_S)
-            row["healthy_after_reset"] = after.healthy
+                after, waited = wait_green(name)
+            row["healthy_after_reset"] = bool(after and after.healthy)
             row["reset_to_green_s"] = waited
-            if not after.healthy:
-                errors.append(f"not healthy after reset: {after.reason}")
+            if after is None or not after.healthy:
+                errors.append(f"not healthy after reset: {after.reason if after else problem}")
         except Exception as exc:
             row["healthy_after_reset"] = False
             errors.append(f"reset failed: {exc.__class__.__name__}: {exc}")
@@ -314,6 +376,7 @@ def main(argv=None):
     action.add_argument("--self-test", action="store_true", help="run every fault once with no agent")
     action.add_argument("--soak", type=int, metavar="SECONDS", help="watch a clean cluster for alerts and red health")
     action.add_argument("--bootstrap", action="store_true", help="install monitoring, the app and the harness workloads")
+    action.add_argument("--build", action="store_true", help="build the app image with no registry login and load it into the sandbox")
     action.add_argument("--validate", action="store_true", help="load and validate the fault library")
     parser.add_argument("--no-agent", action="store_true", help="inject and confirm only; required until the agent exists")
     parser.add_argument("--skip", default="", help="comma-separated fault ids to leave out of --self-test")
@@ -326,6 +389,9 @@ def main(argv=None):
             ok = validate(args.partial)
         elif args.bootstrap:
             bootstrap(args.sandbox)
+            ok = True
+        elif args.build:
+            build(args.sandbox)
             ok = True
         elif args.soak:
             ok = soak(args.sandbox, args.soak)

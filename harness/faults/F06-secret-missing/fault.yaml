@@ -1,0 +1,17 @@
+id: F06
+title: Release references a missing Secret
+category: startup
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.dbSecretName=db-creds-v2
+alert: RolloutStuck
+expected: fix
+root_cause: secret_missing
+acceptable_actions:
+  - { tool: rollback, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

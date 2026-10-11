@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: batch
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nightly-reindex
+  namespace: batch
+spec:
+  activeDeadlineSeconds: 720
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 60
+  template:
+    metadata:
+      labels:
+        app: nightly-reindex
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: api
+              namespaces: ["storefront"]
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: reindex
+          image: localhost:5000/storefront:dev
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -c
+            - |
+              import multiprocessing, time
+              def burn(end):
+                  while time.time() < end:
+                      pass
+              end = time.time() + 700
+              workers = [multiprocessing.Process(target=burn, args=(end,)) for _ in range(4)]
+              for w in workers:
+                  w.start()
+              for w in workers:
+                  w.join()
+          resources:
+            requests:
+              cpu: "1"
+              memory: 64Mi
+            limits:
+              cpu: "2"
+              memory: 128Mi

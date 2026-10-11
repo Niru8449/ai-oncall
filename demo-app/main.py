@@ -10,6 +10,7 @@ ROLES = {
     "loadgen": "app.loadgen",
     "slo-probe": "app.probe",
     "wait": "app.wait",
+    "registry": "app.registry",
 }
 
 

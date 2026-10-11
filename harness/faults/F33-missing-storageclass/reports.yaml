@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: reports
+  namespace: storefront
+  labels:
+    app: reports
+spec:
+  serviceName: reports
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reports
+  template:
+    metadata:
+      labels:
+        app: reports
+    spec:
+      containers:
+        - name: reports
+          image: localhost:5000/storefront:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-c", "import time; time.sleep(10**9)"]
+          volumeMounts:
+            - name: archive
+              mountPath: /archive
+  volumeClaimTemplates:
+    - metadata:
+        name: archive
+        labels:
+          app: reports
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 1Gi

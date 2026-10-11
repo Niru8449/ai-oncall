@@ -1,0 +1,18 @@
+id: F38
+title: Planned maintenance, scaled down on purpose
+category: rollouts
+inject:
+  - kubectl -n storefront annotate deploy/worker oncall/maintenance="until 06:00, OPS-123" --overwrite
+  - kubectl -n storefront scale deploy/worker --replicas=0
+alert: QueueDepthRising
+expected: noop
+root_cause: planned_maintenance
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup:
+  - kubectl -n storefront patch deploy worker -p '{"metadata":{"annotations":{"oncall/maintenance":null}}}'
+reset: helm

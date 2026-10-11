@@ -1,0 +1,18 @@
+id: F32
+title: Worker node goes down
+category: nodes
+inject:
+  - docker stop {sandbox}-worker2
+alert: default
+expected: escalate
+root_cause: node_down
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup:
+  - docker start {sandbox}-worker2
+  - kubectl wait --for=condition=Ready node/{sandbox}-worker2 --timeout=180s
+reset: helm

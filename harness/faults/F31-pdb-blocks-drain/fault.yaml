@@ -1,0 +1,19 @@
+id: F31
+title: Disruption budget blocks maintenance
+category: nodes
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.pdb.enabled=true --set api.pdb.minAvailable=3
+  - kubectl cordon {sandbox}-worker
+alert: NodeDrainStuck
+expected: propose
+root_cause: pdb_blocking
+acceptable_actions:
+  - { tool: patch_pdb, target: pdb/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup:
+  - kubectl uncordon {sandbox}-worker
+reset: helm

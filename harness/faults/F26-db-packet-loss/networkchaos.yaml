@@ -1,0 +1,15 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: postgres-loss
+  namespace: storefront
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces: ["storefront"]
+    labelSelectors:
+      app: postgres
+  loss:
+    loss: "30"
+    correlation: "0"

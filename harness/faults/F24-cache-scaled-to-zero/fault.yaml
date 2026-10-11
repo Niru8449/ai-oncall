@@ -1,0 +1,17 @@
+id: F24
+title: Cache scaled to zero
+category: network
+inject:
+  - kubectl -n storefront scale deploy/redis --replicas=0
+alert: default
+expected: fix
+root_cause: dependency_down
+acceptable_actions:
+  - { tool: scale, target: deploy/redis }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

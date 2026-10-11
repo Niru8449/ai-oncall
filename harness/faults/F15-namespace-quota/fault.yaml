@@ -1,0 +1,18 @@
+id: F15
+title: Namespace quota blocks new pods
+category: resources
+inject:
+  - kubectl apply -f harness/faults/F15-namespace-quota/quota.yaml
+  - kubectl -n storefront rollout restart deploy/api
+alert: RolloutStuck
+expected: escalate
+root_cause: quota_exceeded
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup:
+  - kubectl -n storefront delete resourcequota storefront-pods --ignore-not-found
+reset: helm

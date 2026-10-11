@@ -1,0 +1,18 @@
+id: F33
+title: PVC asks for a missing StorageClass
+category: storage
+inject:
+  - kubectl apply -f harness/faults/F33-missing-storageclass/reports.yaml
+alert: PVCPending
+expected: escalate
+root_cause: storage_class
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup:
+  - kubectl -n storefront delete statefulset reports --ignore-not-found
+  - kubectl -n storefront delete pvc -l app=reports --ignore-not-found
+reset: helm

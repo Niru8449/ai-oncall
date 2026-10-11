@@ -1,0 +1,18 @@
+id: F43
+title: Password rotated, pods not restarted
+category: deps
+inject:
+  - kubectl -n storefront exec postgres-0 -- psql -U shop -d shop -c "ALTER USER shop PASSWORD 'rotated-2026'"
+  - kubectl -n storefront patch secret db-creds --type merge -p '{"stringData":{"password":"rotated-2026","DATABASE_URL":"postgresql://shop:rotated-2026@postgres:5432/shop"}}'
+alert: default
+expected: fix
+root_cause: stale_credentials
+acceptable_actions:
+  - { tool: rollout_restart, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: reinstall

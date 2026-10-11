@@ -136,8 +136,6 @@ def parse(path, alerts, labels):
         raise SpecError(f"{where}: root_cause {data['root_cause']!r} is not in {LABELS_FILE.name}")
 
     inject = _commands(data["inject"], f"{where}: inject")
-    if data["alert"] == "synthetic" and inject:
-        raise SpecError(f"{where}: a synthetic alert has no inject commands")
     if data["alert"] != "synthetic" and not inject:
         raise SpecError(f"{where}: inject is empty")
     cleanup = _commands(data["cleanup"], f"{where}: cleanup")

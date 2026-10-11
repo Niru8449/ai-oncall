@@ -1,0 +1,17 @@
+id: F19
+title: Service selector typo
+category: network
+inject:
+  - kubectl -n storefront patch service api -p '{"spec":{"selector":{"app":"apii"}}}'
+alert: default
+expected: propose
+root_cause: service_selector
+acceptable_actions:
+  - { tool: patch_service, target: svc/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

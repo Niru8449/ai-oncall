@@ -1,0 +1,16 @@
+id: F49
+title: One pod restarted once and recovered
+category: traps
+inject:
+  - kubectl -n storefront exec deploy/api -- python -c "import os, signal; os.kill(1, signal.SIGTERM)"
+alert: synthetic
+expected: noop
+root_cause: transient
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

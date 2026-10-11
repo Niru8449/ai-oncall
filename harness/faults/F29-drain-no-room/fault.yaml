@@ -1,0 +1,19 @@
+id: F29
+title: Worker drained, not enough room
+category: nodes
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.replicas=2 --set api.resources.requests.memory=7Gi --set api.resources.limits.memory=7Gi
+  - kubectl -n storefront rollout status deploy/api --timeout=180s
+  - kubectl drain {sandbox}-worker2 --ignore-daemonsets --delete-emptydir-data --timeout=120s
+alert: default
+expected: escalate
+root_cause: node_unavailable
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 120
+cleanup:
+  - kubectl uncordon {sandbox}-worker2
+reset: helm

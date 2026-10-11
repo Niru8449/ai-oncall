@@ -15,9 +15,15 @@ spec:
       labels:
         app: slo-probe
     spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
       containers:
         - name: slo-probe
-          image: storefront:dev
+          image: localhost:5000/storefront:dev
           imagePullPolicy: IfNotPresent
           ports:
             - name: metrics

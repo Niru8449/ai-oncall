@@ -1,0 +1,18 @@
+id: F13
+title: CPU limit throttles the API
+category: resources
+inject:
+  - kubectl -n storefront set resources deploy/api --requests=cpu=50m --limits=cpu=50m
+alert: default
+expected: fix
+root_cause: cpu_throttled
+acceptable_actions:
+  - { tool: raise_limits, target: deploy/api }
+  - { tool: rollback, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 40
+cleanup: []
+reset: helm

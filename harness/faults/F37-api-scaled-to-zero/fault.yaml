@@ -1,0 +1,17 @@
+id: F37
+title: API scaled to zero by mistake
+category: rollouts
+inject:
+  - kubectl -n storefront scale deploy/api --replicas=0
+alert: default
+expected: fix
+root_cause: scaled_to_zero
+acceptable_actions:
+  - { tool: scale, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

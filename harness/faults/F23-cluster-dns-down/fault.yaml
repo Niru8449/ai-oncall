@@ -1,0 +1,18 @@
+id: F23
+title: Cluster DNS scaled to zero
+category: network
+inject:
+  - kubectl -n kube-system scale deploy/coredns --replicas=0
+alert: default
+expected: escalate
+root_cause: cluster_dns
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup:
+  - kubectl -n kube-system scale deploy/coredns --replicas=2
+  - kubectl -n kube-system rollout status deploy/coredns --timeout=120s
+reset: helm

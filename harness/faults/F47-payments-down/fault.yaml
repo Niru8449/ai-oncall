@@ -1,0 +1,16 @@
+id: F47
+title: Payment provider is down
+category: traps
+inject:
+  - kubectl -n external set env deploy/payments-gw PAYMENTS_FAIL=1
+alert: default
+expected: escalate
+root_cause: external_dependency
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

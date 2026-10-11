@@ -1,0 +1,18 @@
+id: F08
+title: Readiness probe on the wrong path
+category: startup
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.readinessProbe.path=/health
+alert: RolloutStuck
+expected: fix
+root_cause: probe_misconfig
+acceptable_actions:
+  - { tool: rollback, target: deploy/api }
+  - { tool: patch_probe, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

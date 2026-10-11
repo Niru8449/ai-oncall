@@ -23,6 +23,12 @@ MARKER_NAME = "oncall-sandbox"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 ROLLOUT_TIMEOUT = "1200s"
+NODE_CPUS = "2"
+REGISTRY_HOST = "localhost:5000"
+CONTAINERD_CONFIG = "/etc/containerd/config.toml"
+CERTS_DIR = "/etc/containerd/certs.d"
+REGISTRY_CONFIG_PATCH = f'\n[plugins."io.containerd.grpc.v1.cri".registry]\n  config_path = "{CERTS_DIR}"\n'
+REGISTRY_HOSTS_TOML = f'server = "http://{REGISTRY_HOST}"\n\n[host."http://{REGISTRY_HOST}"]\n  capabilities = ["pull", "resolve"]\n'
 
 
 class SandboxError(Exception):
@@ -84,6 +90,28 @@ def dump_diagnostics(name):
         lines = (result.stdout or result.stderr).strip().splitlines()
         print("\n$ " + " ".join(base + args), file=sys.stderr)
         print("\n".join(lines[-30:]), file=sys.stderr, flush=True)
+
+
+def node_exec(node, *args, stdin=None):
+    result = subprocess.run(["docker", "exec", "-i", node, *args], input=stdin, text=True, capture_output=True)
+    if result.returncode != 0:
+        raise SandboxError(f"docker exec {node} {' '.join(args)} failed: {result.stderr.strip()}")
+    return result.stdout
+
+
+def configure_node_registry(node):
+    node_exec(node, "mkdir", "-p", f"{CERTS_DIR}/{REGISTRY_HOST}")
+    node_exec(node, "sh", "-c", f"cat > {CERTS_DIR}/{REGISTRY_HOST}/hosts.toml", stdin=REGISTRY_HOSTS_TOML)
+    if CERTS_DIR not in node_exec(node, "cat", CONTAINERD_CONFIG):
+        node_exec(node, "sh", "-c", f"cat >> {CONTAINERD_CONFIG}", stdin=REGISTRY_CONFIG_PATCH)
+        node_exec(node, "systemctl", "restart", "containerd")
+        print(f"{node}: containerd restarted to read {CERTS_DIR}", flush=True)
+    print(f"{node}: {REGISTRY_HOST} pulls use plain http", flush=True)
+
+
+def configure_registry(name):
+    for node in sh(["kind", "get", "nodes", "--name", name], capture=True).split():
+        configure_node_registry(node)
 
 
 def kind_clusters():
@@ -205,6 +233,9 @@ def create(name):
     kubeconfig = kubeconfig_path(name)
     try:
         sh(["kind", "create", "cluster", "--name", name, "--config", str(rendered), "--kubeconfig", str(kubeconfig)])
+        nodes = sh(["kind", "get", "nodes", "--name", name], capture=True).split()
+        sh(["docker", "update", f"--cpus={NODE_CPUS}", *nodes])
+        configure_registry(name)
         kubectl(name, "apply", "--server-side", "-f", str(CALICO_MANIFEST))
         kubectl(name, "-n", "kube-system", "rollout", "status", "daemonset/calico-node", f"--timeout={ROLLOUT_TIMEOUT}")
         kubectl(name, "-n", "kube-system", "rollout", "status", "deployment/calico-kube-controllers", f"--timeout={ROLLOUT_TIMEOUT}")

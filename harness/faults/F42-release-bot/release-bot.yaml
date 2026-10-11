@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ops
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: release-bot
+  namespace: ops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: release-bot
+  namespace: storefront
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["api"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: release-bot
+  namespace: storefront
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: release-bot
+subjects:
+  - kind: ServiceAccount
+    name: release-bot
+    namespace: ops
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: release-bot
+  namespace: ops
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: release-bot
+          restartPolicy: Never
+          containers:
+            - name: deploy
+              image: localhost:5000/storefront:dev
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - -c
+                - |
+                  import json
+                  import httpx
+                  sa = "/var/run/secrets/kubernetes.io/serviceaccount"
+                  token = open(f"{sa}/token").read()
+                  patch = {"spec": {"template": {"spec": {"containers": [{"name": "api", "image": "localhost:5000/storefront:2.4.0"}]}}}}
+                  response = httpx.patch(
+                      "https://kubernetes.default.svc/apis/apps/v1/namespaces/storefront/deployments/api",
+                      content=json.dumps(patch),
+                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/strategic-merge-patch+json"},
+                      params={"fieldManager": "release-bot"},
+                      verify=f"{sa}/ca.crt",
+                  )
+                  print("release-bot: rolled storefront api to 2.4.0, status", response.status_code)
+                  response.raise_for_status()

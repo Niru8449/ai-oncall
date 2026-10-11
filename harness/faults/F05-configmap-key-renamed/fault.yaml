@@ -1,0 +1,19 @@
+id: F05
+title: ConfigMap key renamed in place
+category: startup
+inject:
+  - kubectl -n storefront patch configmap api-config --type json -p '[{"op":"move","from":"/data/SHOP_NAME","path":"/data/SHOP_TITLE"}]'
+  - kubectl -n storefront rollout restart deploy/api
+alert: RolloutStuck
+expected: propose
+root_cause: configmap_key_missing
+acceptable_actions:
+  - { tool: patch_configmap, target: cm/api-config }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup:
+  - kubectl -n storefront patch configmap api-config --type merge -p '{"data":{"SHOP_TITLE":null}}'
+reset: helm

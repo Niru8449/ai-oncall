@@ -1,0 +1,17 @@
+id: F26
+title: 30% packet loss to postgres
+category: network
+inject:
+  - kubectl apply -f harness/faults/F26-db-packet-loss/networkchaos.yaml
+alert: default
+expected: escalate
+root_cause: network_degraded
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: true
+loadgen_rps: 20
+cleanup:
+  - kubectl -n storefront delete networkchaos postgres-loss --ignore-not-found
+reset: helm

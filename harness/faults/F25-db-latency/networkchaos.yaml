@@ -1,0 +1,16 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: postgres-delay
+  namespace: storefront
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: ["storefront"]
+    labelSelectors:
+      app: postgres
+  delay:
+    latency: 500ms
+    jitter: 0ms
+    correlation: "0"

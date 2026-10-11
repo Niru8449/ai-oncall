@@ -1,0 +1,17 @@
+id: F12
+title: Memory leak in a new release
+category: resources
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.env.LEAK_MB_PER_MIN=60
+alert: default
+expected: fix
+root_cause: memory_leak
+acceptable_actions:
+  - { tool: rollback, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: true
+loadgen_rps: 20
+cleanup: []
+reset: helm

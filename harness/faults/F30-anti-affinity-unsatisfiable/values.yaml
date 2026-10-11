@@ -1,0 +1,8 @@
+api:
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app: api
+          topologyKey: kubernetes.io/hostname

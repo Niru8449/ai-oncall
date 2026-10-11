@@ -1,0 +1,17 @@
+id: F16
+title: Worker evicted for disk use
+category: resources
+inject:
+  - kubectl -n storefront set resources deploy/worker --limits=ephemeral-storage=20Mi
+alert: WorkerRestarting
+expected: propose
+root_cause: ephemeral_storage
+acceptable_actions:
+  - { tool: patch_resources, target: deploy/worker }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

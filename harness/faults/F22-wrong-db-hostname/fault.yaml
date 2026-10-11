@@ -1,0 +1,17 @@
+id: F22
+title: Wrong database hostname
+category: network
+inject:
+  - helm upgrade storefront demo-app/chart -n storefront --reuse-values --set api.env.DB_HOST=postgress
+alert: RolloutStuck
+expected: fix
+root_cause: dns_name
+acceptable_actions:
+  - { tool: rollback, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup: []
+reset: helm

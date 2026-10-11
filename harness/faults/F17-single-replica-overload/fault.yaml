@@ -1,0 +1,17 @@
+id: F17
+title: One replica can't keep up
+category: resources
+inject:
+  - kubectl -n storefront scale deploy/api --replicas=1
+alert: default
+expected: fix
+root_cause: under_provisioned
+acceptable_actions:
+  - { tool: scale, target: deploy/api }
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 120
+cleanup: []
+reset: helm

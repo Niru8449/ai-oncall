@@ -1,0 +1,20 @@
+id: F28
+title: Workers tainted, no toleration
+category: nodes
+inject:
+  - kubectl taint nodes {sandbox}-worker dedicated=batch:NoSchedule --overwrite
+  - kubectl taint nodes {sandbox}-worker2 dedicated=batch:NoSchedule --overwrite
+  - kubectl -n storefront delete pods -l app=api --wait=false
+alert: default
+expected: escalate
+root_cause: node_taint
+acceptable_actions: []
+needs_fresh_cluster: false
+time_budget_s: 600
+settle_s: 0
+sealed: false
+loadgen_rps: 20
+cleanup:
+  - kubectl patch node {sandbox}-worker -p '{"spec":{"taints":null}}'
+  - kubectl patch node {sandbox}-worker2 -p '{"spec":{"taints":null}}'
+reset: helm
