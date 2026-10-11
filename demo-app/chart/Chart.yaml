@@ -1,0 +1,6 @@
+apiVersion: v2
+name: storefront
+description: Demo shop built for breaking, used by the AI on-call harness
+type: application
+version: 0.1.0
+appVersion: dev

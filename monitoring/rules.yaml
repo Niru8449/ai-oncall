@@ -1,0 +1,68 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: storefront-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: storefront
+      rules:
+        - alert: SLOBreached
+          expr: |
+            (sum(rate(probe_requests_total{result="ok"}[60s])) / sum(rate(probe_requests_total[60s])) < 0.99)
+            or (histogram_quantile(0.95, sum by (le) (rate(probe_latency_seconds_bucket[60s]))) > 0.3)
+          for: 30s
+          labels:
+            severity: page
+            namespace: storefront
+          annotations:
+            summary: storefront SLO breached
+        - alert: RolloutStuck
+          expr: |
+            sum(kube_deployment_spec_replicas{namespace="storefront"} - kube_deployment_status_replicas_updated{namespace="storefront"}) > 0
+          for: 2m
+          labels:
+            severity: page
+            namespace: storefront
+          annotations:
+            summary: storefront rollout not progressing
+        - alert: WorkerRestarting
+          expr: |
+            (sum(increase(kube_pod_container_status_restarts_total{namespace="storefront", container="worker"}[5m])) > 0)
+            or (sum(kube_pod_status_reason{namespace="storefront", reason="Evicted", pod=~"worker-.*"}) > 0)
+          labels:
+            severity: page
+            namespace: storefront
+          annotations:
+            summary: storefront worker restarting
+        - alert: PVCPending
+          expr: |
+            sum(kube_persistentvolumeclaim_status_phase{namespace="storefront", phase="Pending"}) > 0
+          for: 1m
+          labels:
+            severity: page
+            namespace: storefront
+          annotations:
+            summary: storefront volume claim pending
+        - alert: QueueDepthRising
+          expr: |
+            (max(queue_depth{namespace="storefront"}) > 100)
+            and (deriv(max(queue_depth{namespace="storefront"})[2m:15s]) > 0)
+          for: 2m
+          labels:
+            severity: page
+            namespace: storefront
+          annotations:
+            summary: storefront job queue growing
+        - alert: NodeDrainStuck
+          expr: |
+            sum(
+              (kube_node_spec_unschedulable == 1)
+              * on(node) count by (node) (kube_pod_info{namespace="storefront"})
+            ) > 0
+          for: 2m
+          labels:
+            severity: page
+            namespace: storefront
+          annotations:
+            summary: node drain blocked by storefront pods

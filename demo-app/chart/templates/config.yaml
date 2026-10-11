@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  labels:
+    {{- include "storefront.labels" (dict "app" "api" "root" $) | nindent 4 }}
+data:
+  SHOP_NAME: {{ .Values.shopName | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-creds
+  labels:
+    {{- include "storefront.labels" (dict "app" "postgres" "root" $) | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ .Values.postgres.password | quote }}
+  DATABASE_URL: {{ printf "postgresql://%s:%s@postgres:5432/%s" .Values.postgres.user .Values.postgres.password .Values.postgres.database | quote }}

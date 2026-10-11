@@ -1,0 +1,119 @@
+image:
+  repository: storefront
+  tag: dev
+  pullPolicy: IfNotPresent
+
+shopName: Storefront demo
+
+api:
+  replicas: 3
+  image:
+    repository: ""
+    tag: ""
+  command: ["python", "main.py"]
+  withDatabaseUrl: true
+  dbSecretName: db-creds
+  configMapKey: SHOP_NAME
+  env:
+    STARTUP_DELAY_S: "0"
+    FAIL_RATE: "0"
+    LEAK_MB_PER_MIN: "0"
+    HANG_AFTER: "0"
+    DB_POOL_SIZE: "5"
+    CACHE_MB: "64"
+    DB_HOST: postgres
+    REDIS_URL: redis://redis:6379/0
+    PAYMENTS_URL: http://payments-gw.external.svc.cluster.local/charge
+    UPLOAD_DIR: /uploads
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  livenessProbe:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readinessProbe:
+    path: /ready
+    initialDelaySeconds: 2
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  uploadsReadOnly: false
+  initContainer:
+    enabled: false
+    waitFor: ""
+  imagePullSecrets: []
+  pdb:
+    enabled: false
+    minAvailable: 1
+  hpa:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPU: 70
+
+worker:
+  replicas: 2
+  env:
+    WORK_MS: "20"
+    TMP_KEEP: "100"
+    TMP_FILE_KB: "256"
+    DB_HOST: postgres
+    REDIS_URL: redis://redis:6379/0
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+postgres:
+  image: postgres:16-alpine
+  user: shop
+  database: shop
+  password: shop-dev-password
+  maxConnections: 100
+  dataPath: /var/lib/postgresql/data
+  storage: 1Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+redis:
+  image: redis:7-alpine
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+payments:
+  namespace: external
+  replicas: 1
+  env:
+    PAYMENTS_FAIL: "0"
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi

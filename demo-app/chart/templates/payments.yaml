@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-gw
+  namespace: {{ .Values.payments.namespace }}
+  labels:
+    {{- include "storefront.labels" (dict "app" "payments-gw" "root" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.payments.replicas }}
+  selector:
+    matchLabels:
+      app: payments-gw
+  template:
+    metadata:
+      labels:
+        {{- include "storefront.labels" (dict "app" "payments-gw" "root" $) | nindent 8 }}
+    spec:
+      containers:
+        - name: payments-gw
+          image: {{ include "storefront.image" (dict "root" $) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: ROLE
+              value: payments-gw
+            {{- include "storefront.env" .Values.payments.env | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.payments.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-gw
+  namespace: {{ .Values.payments.namespace }}
+  labels:
+    {{- include "storefront.labels" (dict "app" "payments-gw" "root" $) | nindent 4 }}
+spec:
+  selector:
+    app: payments-gw
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
