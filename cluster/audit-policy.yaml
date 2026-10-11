@@ -1,0 +1,7 @@
+# cluster/audit-policy.yaml: log every request the agent makes, nothing else
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  - level: Metadata
+    users: ["system:serviceaccount:storefront:oncall-agent"]
+  - level: None
