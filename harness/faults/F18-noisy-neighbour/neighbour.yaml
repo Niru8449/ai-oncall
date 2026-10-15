@@ -23,7 +23,7 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:
                 matchLabels:
-                  app: api
+                  app: worker
               namespaces: ["storefront"]
               topologyKey: kubernetes.io/hostname
       containers:
@@ -46,8 +46,8 @@ spec:
                   w.join()
           resources:
             requests:
-              cpu: "1"
+              cpu: "4"
               memory: 64Mi
             limits:
-              cpu: "2"
+              cpu: "4"
               memory: 128Mi

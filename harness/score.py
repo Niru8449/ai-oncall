@@ -48,7 +48,7 @@ class Prometheus:
         return self._get("/api/v1/alerts")["alerts"]
 
     def firing(self):
-        return {a["labels"].get("alertname") for a in self.alerts() if a.get("state") == "firing"}
+        return {a["labels"].get("alertname"): a.get("activeAt") for a in self.alerts() if a.get("state") == "firing"}
 
 
 @dataclass

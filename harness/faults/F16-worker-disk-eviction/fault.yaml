@@ -13,5 +13,6 @@ time_budget_s: 600
 settle_s: 0
 sealed: false
 loadgen_rps: 20
-cleanup: []
+cleanup:
+  - kubectl -n storefront patch deploy worker -p '{"spec":{"template":{"spec":{"containers":[{"name":"worker","resources":{"limits":{"ephemeral-storage":null}}}]}}}}'
 reset: helm

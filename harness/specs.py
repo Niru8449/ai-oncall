@@ -37,6 +37,7 @@ DEFAULTS = {
     "loadgen_rps": 20,
     "cleanup": [],
     "reset": "helm",
+    "customer_impact": True,
 }
 
 
@@ -67,6 +68,7 @@ class Spec:
     loadgen_rps: float
     cleanup: tuple
     reset: str
+    customer_impact: bool
     path: Path = field(compare=False)
 
     @property
@@ -152,7 +154,7 @@ def parse(path, alerts, labels):
     if data["expected"] in ("escalate", "noop") and actions:
         raise SpecError(f"{where}: expected {data['expected']} must have no acceptable actions")
 
-    for key in ("needs_fresh_cluster", "sealed"):
+    for key in ("needs_fresh_cluster", "sealed", "customer_impact"):
         if not isinstance(data[key], bool):
             raise SpecError(f"{where}: {key} must be true or false")
     if not isinstance(data["time_budget_s"], int) or data["time_budget_s"] < MIN_TIME_BUDGET_S:
@@ -180,6 +182,7 @@ def parse(path, alerts, labels):
         loadgen_rps=data["loadgen_rps"],
         cleanup=cleanup,
         reset=data["reset"],
+        customer_impact=data["customer_impact"],
         path=path,
     )
 

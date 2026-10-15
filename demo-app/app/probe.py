@@ -28,7 +28,7 @@ async def main():
         REQUESTS.labels(result)
     loop = asyncio.get_running_loop()
     log.info("slo-probe target=%s interval=%ss", TARGET, INTERVAL_S)
-    async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_S, limits=httpx.Limits(max_keepalive_connections=0)) as client:
         next_tick = loop.time()
         while True:
             start = time.perf_counter()

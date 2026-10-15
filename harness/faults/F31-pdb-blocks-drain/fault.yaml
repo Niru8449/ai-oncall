@@ -17,3 +17,4 @@ loadgen_rps: 20
 cleanup:
   - kubectl uncordon {sandbox}-worker
 reset: helm
+customer_impact: false

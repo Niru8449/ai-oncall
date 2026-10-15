@@ -16,3 +16,4 @@ cleanup:
   - kubectl -n storefront delete statefulset reports --ignore-not-found
   - kubectl -n storefront delete pvc -l app=reports --ignore-not-found
 reset: helm
+customer_impact: false

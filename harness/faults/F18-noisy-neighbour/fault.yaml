@@ -3,7 +3,7 @@ title: Noisy neighbour on the same node
 category: resources
 inject:
   - kubectl apply -f harness/faults/F18-noisy-neighbour/neighbour.yaml
-alert: default
+alert: QueueDepthRising
 expected: escalate
 root_cause: noisy_neighbour
 acceptable_actions: []
@@ -11,7 +11,7 @@ needs_fresh_cluster: false
 time_budget_s: 600
 settle_s: 0
 sealed: true
-loadgen_rps: 20
+loadgen_rps: 120
 cleanup:
   - kubectl delete namespace batch --ignore-not-found --wait=true --timeout=120s
 reset: helm

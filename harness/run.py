@@ -34,6 +34,7 @@ RUNS_DIR = ROOT / "reports" / "runs"
 DEFAULT_RPS = 20
 GREEN_TIMEOUT_S = 420
 ALERT_TIMEOUT_S = 600
+ALERT_CLEAR_TIMEOUT_S = 180
 ROLLOUT_TIMEOUT = "--timeout=300s"
 KIND_CLUSTER_LABEL = "io.x-k8s.kind.cluster"
 APP_ROLLOUTS = (
@@ -57,6 +58,10 @@ class HarnessError(Exception):
 
 def now_iso():
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_iso(text):
+    return dt.datetime.fromisoformat(text)
 
 
 def sandbox_env(name):
@@ -111,6 +116,7 @@ def reset_app(name, reset="helm", cleanup=()):
         kubectl(name, "-n", APP_NAMESPACE, "delete", "pvc", "data-postgres-0", "--ignore-not-found", "--timeout=180s")
     helm(name, "upgrade", "--install", RELEASE, str(CHART), "-n", APP_NAMESPACE, "--reset-values", "--force-conflicts")
     kubectl(name, "-n", APP_NAMESPACE, "delete", "pods", "--field-selector=status.phase=Failed", "--ignore-not-found")
+    kubectl(name, "-n", APP_NAMESPACE, "delete", "pods", "--field-selector=status.phase=Succeeded", "--ignore-not-found")
     for namespace, obj in APP_ROLLOUTS:
         kubectl(name, "-n", namespace, "rollout", "status", obj, ROLLOUT_TIMEOUT)
     kubectl(name, "-n", APP_NAMESPACE, "exec", "deploy/redis", "--", "redis-cli", "DEL", "jobs")
@@ -217,16 +223,30 @@ def reset_and_wait(name, spec):
     return wait_green(name)
 
 
-def watch(prom, spec, timeout_s):
+def wait_alert_clear(prom, alert, timeout_s):
+    start = time.monotonic()
+    while alert in prom.firing():
+        waited = round(time.monotonic() - start)
+        if waited >= timeout_s:
+            raise HarnessError(f"alert {alert} still firing {waited}s after the sandbox turned green")
+        time.sleep(score.POLL_S)
+    waited = round(time.monotonic() - start)
+    if waited:
+        print(f"  alert {alert} from the previous fault cleared after {waited}s", flush=True)
+    return waited
+
+
+def watch(prom, spec, timeout_s, inject_at):
     alert = specs.resolve_alert(spec.alert)
-    want_red = spec.expected != "noop"
+    want_red = spec.expected != "noop" and spec.customer_impact
     start = time.monotonic()
     alert_after = 0 if spec.synthetic else None
     red_after = red_reason = None
     while True:
         elapsed = round(time.monotonic() - start)
         try:
-            if alert_after is None and alert in prom.firing():
+            active_at = prom.firing().get(alert)
+            if alert_after is None and active_at and parse_iso(active_at) >= inject_at:
                 alert_after = elapsed
                 print(f"  alert {alert} firing after {elapsed}s", flush=True)
             if want_red and red_after is None:
@@ -259,13 +279,18 @@ def append_row(row):
 
 
 def passed(row):
-    red_ok = row.get("red_after_inject") or row.get("expected") == "noop"
+    if row.get("expected") == "noop":
+        red_ok = True
+    elif row.get("customer_impact", True):
+        red_ok = row.get("red_after_inject")
+    else:
+        red_ok = not row.get("red_after_inject")
     return bool(row.get("healthy_before") and row.get("alert_fired") and red_ok and row.get("healthy_after_reset") and not row.get("error"))
 
 
 def run_fault(name, spec, mode):
     print(f"\n=== {spec.id} {spec.title} (expected {spec.expected}) ===", flush=True)
-    row = {"ts": now_iso(), "sandbox": name, "fault": spec.id, "mode": mode, "expected": spec.expected, "healthy_before": False}
+    row = {"ts": now_iso(), "sandbox": name, "fault": spec.id, "mode": mode, "expected": spec.expected, "customer_impact": spec.customer_impact, "healthy_before": False}
     errors = []
     start = time.monotonic()
     try:
@@ -277,10 +302,12 @@ def run_fault(name, spec, mode):
         row["healthy_before"] = before.healthy
         if not before.healthy:
             raise HarnessError(f"not healthy before inject: {before.reason}")
+        if not spec.synthetic:
+            row["alert_clear_s"] = wait_alert_clear(prom, specs.resolve_alert(spec.alert), ALERT_CLEAR_TIMEOUT_S)
         row["inject_at"] = now_iso()
         for command in spec.inject:
             run_spec_command(name, command)
-        row.update(watch(prom, spec, ALERT_TIMEOUT_S))
+        row.update(watch(prom, spec, ALERT_TIMEOUT_S, parse_iso(row["inject_at"])))
     except Exception as exc:
         errors.append(f"{exc.__class__.__name__}: {exc}")
         print(f"error: {exc}", file=sys.stderr, flush=True)
