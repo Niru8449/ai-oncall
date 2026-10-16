@@ -50,6 +50,9 @@ class Prometheus:
     def firing(self):
         return {a["labels"].get("alertname"): a.get("activeAt") for a in self.alerts() if a.get("state") == "firing"}
 
+    def active(self):
+        return {a["labels"].get("alertname"): a.get("state") for a in self.alerts() if a.get("state") in ("pending", "firing")}
+
 
 @dataclass
 class Health:

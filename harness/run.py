@@ -225,10 +225,10 @@ def reset_and_wait(name, spec):
 
 def wait_alert_clear(prom, alert, timeout_s):
     start = time.monotonic()
-    while alert in prom.firing():
+    while alert in prom.active():
         waited = round(time.monotonic() - start)
         if waited >= timeout_s:
-            raise HarnessError(f"alert {alert} still firing {waited}s after the sandbox turned green")
+            raise HarnessError(f"alert {alert} still pending or firing {waited}s after the sandbox turned green")
         time.sleep(score.POLL_S)
     waited = round(time.monotonic() - start)
     if waited:
