@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import re
 import secrets
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -17,6 +19,10 @@ SANDBOXES = Path.home() / ".oncall" / "sandboxes"
 KIND_TEMPLATE = ROOT / "cluster" / "kind-config.yaml"
 CALICO_MANIFEST = ROOT / "cluster" / "calico.yaml"
 AUDIT_DIR = ROOT / "reports" / "audit"
+AGENT_RBAC = ROOT / "rbac" / "agent-role.yaml"
+AGENT_NAMESPACE = "storefront"
+AGENT_TOKEN_SECRET = "oncall-agent-token"
+AGENT_TOKEN_TIMEOUT_S = 30
 NAMESPACES = ("storefront", "harness", "external")
 MARKER_NAMESPACE = "storefront"
 MARKER_NAME = "oncall-sandbox"
@@ -59,8 +65,16 @@ def id_path(name):
     return sandbox_dir(name) / "id"
 
 
+def agent_kubeconfig_path(name):
+    return sandbox_dir(name) / "agent.kubeconfig"
+
+
 def context_name(name):
     return f"kind-{name}"
+
+
+def agent_context_name(name):
+    return f"kind-{name}-agent"
 
 
 def validate_name(name):
@@ -220,6 +234,36 @@ def admin_client(name):
     return new_api_client(name)
 
 
+def install_agent(name):
+    kubectl(name, "apply", "-f", str(AGENT_RBAC))
+    core = client.CoreV1Api(new_api_client(name))
+    deadline = time.monotonic() + AGENT_TOKEN_TIMEOUT_S
+    while True:
+        secret = core.read_namespaced_secret(AGENT_TOKEN_SECRET, AGENT_NAMESPACE)
+        token = (secret.data or {}).get("token")
+        if token:
+            break
+        if time.monotonic() > deadline:
+            raise SandboxError(f"secret {AGENT_NAMESPACE}/{AGENT_TOKEN_SECRET} got no token within {AGENT_TOKEN_TIMEOUT_S}s")
+        time.sleep(1)
+    admin = load_kubeconfig(name)
+    cluster = next(c["cluster"] for c in admin.get("clusters", []) if c.get("name") == context_name(name))
+    ctx = agent_context_name(name)
+    kubeconfig = {
+        "apiVersion": "v1",
+        "kind": "Config",
+        "clusters": [{"name": context_name(name), "cluster": {"server": cluster["server"], "certificate-authority-data": cluster["certificate-authority-data"]}}],
+        "users": [{"name": ctx, "user": {"token": base64.b64decode(token).decode()}}],
+        "contexts": [{"name": ctx, "context": {"cluster": context_name(name), "user": ctx, "namespace": AGENT_NAMESPACE}}],
+        "current-context": ctx,
+    }
+    path = agent_kubeconfig_path(name)
+    path.write_text(yaml.dump(kubeconfig, Dumper=BlockDumper, sort_keys=False))
+    path.chmod(0o600)
+    print(f"agent identity ready: context {ctx}, kubeconfig {path}")
+    return True
+
+
 def create(name):
     validate_name(name)
     if name in kind_clusters():
@@ -254,6 +298,7 @@ def create(name):
             ),
         )
         id_path(name).write_text(sandbox_id + "\n")
+        install_agent(name)
     except BaseException as exc:
         print(f"\ncreate failed: {exc}", file=sys.stderr, flush=True)
         try:
@@ -268,6 +313,7 @@ def create(name):
     print(f"  id          {sandbox_id}")
     print(f"  context     {context_name(name)}")
     print(f"  kubeconfig  {kubeconfig}")
+    print(f"  agent       {agent_context_name(name)} in {agent_kubeconfig_path(name)}")
     print(f"  audit log   {AUDIT_DIR / 'kube-apiserver-audit.log'}")
     print(f"\nexport KUBECONFIG={kubeconfig}\n")
     return print_checks(run_checks(name))
@@ -276,6 +322,13 @@ def create(name):
 def check(name):
     validate_name(name)
     return print_checks(run_checks(name))
+
+
+def agent(name):
+    validate_name(name)
+    if not print_checks(run_checks(name)):
+        raise SandboxError(f"refusing to touch {name!r}: it is not a sandbox this script created, or it is unreachable")
+    return install_agent(name)
 
 
 def delete(name):
@@ -294,12 +347,13 @@ def main(argv=None):
     for command, help_text in (
         ("create", "create a kind sandbox with Calico, namespaces and the oncall-sandbox marker"),
         ("check", "run the four safety checks against a sandbox"),
+        ("agent", "create or refresh the agent's read-only identity and agent.kubeconfig"),
         ("delete", "delete a sandbox this script created"),
     ):
         sub.add_parser(command, help=help_text).add_argument("name")
     args = parser.parse_args(argv)
     try:
-        ok = {"create": create, "check": check, "delete": delete}[args.command](args.name)
+        ok = {"create": create, "check": check, "agent": agent, "delete": delete}[args.command](args.name)
     except SandboxError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -113,3 +113,7 @@ def wait_for(prom, healthy, timeout_s, window_s=60):
         if time.monotonic() - start >= timeout_s:
             return last, None
         time.sleep(POLL_S)
+
+
+def label_match(expected, diagnosis):
+    return bool(diagnosis) and diagnosis.get("root_cause") == expected

@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
@@ -278,6 +279,43 @@ def append_row(row):
     return path
 
 
+def alert_payload(alert_name, prom):
+    for alert in prom.alerts():
+        if alert["labels"].get("alertname") == alert_name and alert.get("state") == "firing":
+            return {"alertname": alert_name, "labels": alert.get("labels", {}), "annotations": alert.get("annotations", {}), "activeAt": alert.get("activeAt")}
+    rules = yaml.safe_load((MONITORING_DIR / "rules.yaml").read_text())
+    for group in rules["spec"]["groups"]:
+        for rule in group["rules"]:
+            if rule.get("alert") == alert_name:
+                labels = {"alertname": alert_name, **rule.get("labels", {})}
+                return {"alertname": alert_name, "labels": labels, "annotations": rule.get("annotations", {}), "activeAt": now_iso()}
+    return {"alertname": alert_name, "labels": {"alertname": alert_name}, "annotations": {}, "activeAt": now_iso()}
+
+
+def run_agent(name, spec, prom):
+    sys.path.insert(0, str(ROOT / "agent"))
+    import llm
+    import loop
+
+    alert_name = specs.resolve_alert(spec.alert)
+    client = llm.Client()
+    print(f"  agent: {client.describe()}", flush=True)
+    result = loop.diagnose(name, alert_payload(alert_name, prom), client)
+    diagnosis = result["diagnosis"]
+    match = score.label_match(spec.root_cause, diagnosis)
+    verdict = "MATCH" if match else f"expected {spec.root_cause}"
+    print(f"  diagnosis: {diagnosis['root_cause']} ({diagnosis['confidence']:.2f}) decision {diagnosis['decision']} after {result['reads']} reads, {result['elapsed_s']}s -> {verdict}", flush=True)
+    return {
+        "agent_model": client.describe(),
+        "diagnosis": diagnosis,
+        "agent_reads": result["reads"],
+        "agent_trace": result["trace"],
+        "agent_elapsed_s": result["elapsed_s"],
+        "agent_tokens": result["usage"],
+        "label_match": match,
+    }
+
+
 def passed(row):
     if row.get("expected") == "noop":
         red_ok = True
@@ -308,6 +346,12 @@ def run_fault(name, spec, mode):
         for command in spec.inject:
             run_spec_command(name, command)
         row.update(watch(prom, spec, ALERT_TIMEOUT_S, parse_iso(row["inject_at"])))
+        if mode == "diagnose" and row.get("alert_fired"):
+            try:
+                row.update(run_agent(name, spec, prom))
+            except Exception as exc:
+                row["agent_error"] = f"{exc.__class__.__name__}: {exc}"
+                print(f"  agent failed: {exc}", file=sys.stderr, flush=True)
     except Exception as exc:
         errors.append(f"{exc.__class__.__name__}: {exc}")
         print(f"error: {exc}", file=sys.stderr, flush=True)
@@ -361,6 +405,18 @@ def self_test(name, skip, partial, seed):
     return all(passed(r) for r in rows)
 
 
+def dev_run(name, skip, seed):
+    library = specs.load_library(complete=True)
+    chosen = [s for s in library.values() if not s.sealed and s.id not in skip]
+    random.Random(seed).shuffle(chosen)
+    print(f"dev run: {len(chosen)} faults with the agent, order {' '.join(s.id for s in chosen)}", flush=True)
+    rows = [run_fault(name, spec, "diagnose") for spec in chosen]
+    print_summary(rows)
+    matched = sum(1 for r in rows if r.get("label_match"))
+    print(f"\ndiagnosis: {matched} of {len(rows)} root causes matched; run harness/report.py for the breakdown", flush=True)
+    return all(passed(r) for r in rows)
+
+
 def soak(name, seconds):
     api = sandbox.admin_client(name)
     prom = score.Prometheus(api)
@@ -401,12 +457,13 @@ def main(argv=None):
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--fault", help="run one fault, e.g. F11")
     action.add_argument("--self-test", action="store_true", help="run every fault once with no agent")
+    action.add_argument("--dev-run", action="store_true", help="run every dev-set fault once with the agent in diagnose mode")
     action.add_argument("--soak", type=int, metavar="SECONDS", help="watch a clean cluster for alerts and red health")
     action.add_argument("--bootstrap", action="store_true", help="install monitoring, the app and the harness workloads")
     action.add_argument("--build", action="store_true", help="build the app image with no registry login and load it into the sandbox")
     action.add_argument("--validate", action="store_true", help="load and validate the fault library")
-    parser.add_argument("--no-agent", action="store_true", help="inject and confirm only; required until the agent exists")
-    parser.add_argument("--skip", default="", help="comma-separated fault ids to leave out of --self-test")
+    parser.add_argument("--no-agent", action="store_true", help="inject and confirm only, no agent")
+    parser.add_argument("--skip", default="", help="comma-separated fault ids to leave out of --self-test or --dev-run")
     parser.add_argument("--partial", action="store_true", help="allow a library with fewer than 50 specs")
     parser.add_argument("--seed", type=int, default=None, help="shuffle seed for --self-test")
     args = parser.parse_args(argv)
@@ -425,13 +482,18 @@ def main(argv=None):
         elif args.self_test:
             skip = {s.strip() for s in args.skip.split(",") if s.strip()}
             ok = self_test(args.sandbox, skip, args.partial, args.seed)
+        elif args.dev_run:
+            skip = {s.strip() for s in args.skip.split(",") if s.strip()}
+            ok = dev_run(args.sandbox, skip, args.seed)
         else:
-            if not args.no_agent:
-                raise HarnessError("the agent arrives in week 2; pass --no-agent")
             library = specs.load_library()
             if args.fault not in library:
                 raise HarnessError(f"no fault {args.fault!r}; known: {' '.join(sorted(library))}")
-            ok = passed(run_fault(args.sandbox, library[args.fault], "no-agent"))
+            spec = library[args.fault]
+            if not args.no_agent and spec.sealed:
+                raise HarnessError(f"{spec.id} is sealed; it never runs against the agent before week 4")
+            row = run_fault(args.sandbox, spec, "no-agent" if args.no_agent else "diagnose")
+            ok = passed(row) and (args.no_agent or bool(row.get("label_match")))
     except (HarnessError, SandboxError, specs.SpecError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
