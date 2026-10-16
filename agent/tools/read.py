@@ -140,18 +140,20 @@ TOOL_SPECS = [
 ]
 
 
+HANDLERS = {
+    "k8s_get": lambda t, a: t.get(a["kind"], a.get("name")),
+    "k8s_describe": lambda t, a: t.describe(a["kind"], a["name"]),
+    "k8s_logs": lambda t, a: t.logs(a["pod"], a.get("container"), bool(a.get("previous"))),
+    "k8s_events": lambda t, a: t.events(),
+    "rollout_history": lambda t, a: t.rollout_history(a["deployment"]),
+    "promql": lambda t, a: t.promql(a["query"]),
+}
+
+
 def call(tools, name, arguments):
-    handlers = {
-        "k8s_get": lambda a: tools.get(a["kind"], a.get("name")),
-        "k8s_describe": lambda a: tools.describe(a["kind"], a["name"]),
-        "k8s_logs": lambda a: tools.logs(a["pod"], a.get("container"), bool(a.get("previous"))),
-        "k8s_events": lambda a: tools.events(),
-        "rollout_history": lambda a: tools.rollout_history(a["deployment"]),
-        "promql": lambda a: tools.promql(a["query"]),
-    }
-    if name not in handlers:
+    if name not in HANDLERS:
         raise ToolError(f"unknown tool {name!r}")
     try:
-        return handlers[name](arguments or {})
+        return HANDLERS[name](tools, arguments or {})
     except KeyError as exc:
         raise ToolError(f"{name}: missing argument {exc}")

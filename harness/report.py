@@ -10,16 +10,44 @@ RUNS_DIR = ROOT / "reports" / "runs"
 BUCKETS = ((0.0, 0.5), (0.5, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.01))
 
 
-def load_rows(paths, since):
+def load_rows(paths, since, mode="diagnose"):
     rows = []
     for path in paths:
         for line in path.read_text().splitlines():
             if not line.strip():
                 continue
             row = json.loads(line)
-            if row.get("mode") == "diagnose" and row.get("ts", "") >= since:
+            if row.get("mode") == mode and row.get("ts", "") >= since:
                 rows.append(row)
     return rows
+
+
+def report_act(rows, out=sys.stdout):
+    sys.path.insert(0, str(ROOT / "harness"))
+    import score
+
+    if not rows:
+        print("no act rows found", file=out)
+        return
+    print(score.summary_line(rows), file=out)
+    print(f"faults: {len(rows)}  label matched: {sum(1 for r in rows if r.get('label_match'))}  writes: {sum(r.get('agent_writes') or 0 for r in rows)}  approved proposals: {sum(1 for r in rows if r.get('approved_by'))}", file=out)
+    harmful = [r for r in rows if r.get("outcome") == "harmful"]
+    if harmful:
+        print("\nharmful, with the reason the scorer gave:", file=out)
+        for r in harmful:
+            print(f"  {r['fault']}: " + "; ".join(r.get("outcome_reasons") or []), file=out)
+    healthy = [r.get("time_to_healthy_s") for r in rows if r.get("time_to_healthy_s") is not None]
+    if healthy:
+        print(f"\ntime from alert to healthy, fixed faults: median {sorted(healthy)[len(healthy) // 2]}s, max {max(healthy)}s", file=out)
+    print("\nper fault:", file=out)
+    for r in rows:
+        d = r.get("diagnosis") or {}
+        acts = ", ".join(f"{a.get('tool')}{'' if not a.get('target') else ' ' + a['target']}:{a.get('status')}" for a in r.get("agent_actions") or []) or "-"
+        label = d.get("root_cause", "-")
+        mark = "ok " if r.get("outcome") in score.PASS_OUTCOMES else "XX "
+        print(f"  {mark}{r['fault']} {r['expected']:9s} {str(r.get('outcome')):10s} {label:26s} conf {d.get('confidence', 0):.2f}  {acts}", file=out)
+        if r.get("outcome") not in score.PASS_OUTCOMES and r.get("outcome_reasons"):
+            print(f"       {'; '.join(r['outcome_reasons'])[:160]}", file=out)
 
 
 def latest_per_fault(rows):
@@ -96,13 +124,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="diagnosis report from the JSONL run rows")
     parser.add_argument("--since", default="", help="only rows with ts >= this ISO timestamp")
     parser.add_argument("--all-runs", action="store_true", help="count every row, not only the latest row per fault")
+    parser.add_argument("--mode", default="diagnose", choices=("diagnose", "act"), help="which rows to report: diagnose (default) or act")
     parser.add_argument("files", nargs="*", help="JSONL files; default: every reports/runs/*.jsonl")
     args = parser.parse_args(argv)
     paths = [Path(f) for f in args.files] or sorted(RUNS_DIR.glob("*.jsonl"))
-    rows = load_rows(paths, args.since)
+    rows = load_rows(paths, args.since, args.mode)
     if not args.all_runs:
         rows = latest_per_fault(rows)
-    report(rows)
+    if args.mode == "act":
+        report_act(rows)
+    else:
+        report(rows)
     return 0
 
 

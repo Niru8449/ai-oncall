@@ -9,6 +9,8 @@ PROVIDERS = {
     "gemini": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "key_env": "GEMINI_API_KEY"},
     "ollama": {"base_url": "http://127.0.0.1:11434/v1", "key_env": None},
 }
+SCRIPTED = "scripted"
+SCRIPT_ENV = "ONCALL_LLM_SCRIPT"
 TIMEOUT_S = 120
 
 
@@ -16,11 +18,51 @@ class LLMError(Exception):
     pass
 
 
-class Client:
+class ScriptedClient:
+    def __init__(self, path=None):
+        self.path = path or os.environ.get(SCRIPT_ENV)
+        if not self.path:
+            raise LLMError(f"the scripted provider needs {SCRIPT_ENV}=<file.json>")
+        try:
+            self.steps = json.loads(open(self.path).read())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise LLMError(f"cannot read {self.path}: {exc}")
+        if not isinstance(self.steps, list):
+            raise LLMError(f"{self.path} must hold a JSON list of steps")
+        self.provider = SCRIPTED
+        self.model = os.path.basename(self.path)
+        self.calls = 0
+
+    def describe(self):
+        return f"scripted {self.path}"
+
+    def chat(self, messages, tools=None, temperature=0):
+        self.calls += 1
+        offered = {t["function"]["name"] for t in tools or []}
+        while self.steps:
+            step = self.steps[0]
+            if "tool" in step and step["tool"] not in offered:
+                self.steps.pop(0)
+                continue
+            self.steps.pop(0)
+            if "tool" in step:
+                call = {"id": f"call{self.calls}", "type": "function", "function": {"name": step["tool"], "arguments": json.dumps(step.get("args") or {})}}
+                return {"role": "assistant", "content": None, "tool_calls": [call]}, {"prompt_tokens": 0, "completion_tokens": 0}
+            return {"role": "assistant", "content": step.get("content", "")}, {"prompt_tokens": 0, "completion_tokens": 0}
+        raise LLMError(f"the script {self.path} ran out of steps")
+
+
+def Client(provider=None, model=None, base_url=None, api_key=None):
+    if (provider or os.environ.get("ONCALL_LLM_PROVIDER")) == SCRIPTED:
+        return ScriptedClient()
+    return HttpClient(provider, model, base_url, api_key)
+
+
+class HttpClient:
     def __init__(self, provider=None, model=None, base_url=None, api_key=None):
         self.provider = provider or os.environ.get("ONCALL_LLM_PROVIDER", "ollama")
         if self.provider not in PROVIDERS:
-            raise LLMError(f"unknown provider {self.provider!r}; use one of {sorted(PROVIDERS)}")
+            raise LLMError(f"unknown provider {self.provider!r}; use one of {sorted(PROVIDERS)} or {SCRIPTED}")
         preset = PROVIDERS[self.provider]
         self.base_url = (base_url or os.environ.get("ONCALL_LLM_BASE_URL") or preset["base_url"]).rstrip("/")
         self.model = model or os.environ.get("ONCALL_LLM_MODEL")

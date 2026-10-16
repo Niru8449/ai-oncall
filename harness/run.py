@@ -13,6 +13,8 @@ import yaml
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
+import audit
+import invariants
 import sandbox
 import score
 import specs
@@ -38,6 +40,8 @@ ALERT_TIMEOUT_S = 600
 ALERT_CLEAR_TIMEOUT_S = 180
 ROLLOUT_TIMEOUT = "--timeout=300s"
 KIND_CLUSTER_LABEL = "io.x-k8s.kind.cluster"
+AGENT_MODES = ("diagnose", "act")
+REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
 APP_ROLLOUTS = (
     ("storefront", "statefulset/postgres"),
     ("storefront", "deployment/redis"),
@@ -292,28 +296,105 @@ def alert_payload(alert_name, prom):
     return {"alertname": alert_name, "labels": {"alertname": alert_name}, "annotations": {}, "activeAt": now_iso()}
 
 
-def run_agent(name, spec, prom):
+def agent_mode():
+    mode = os.environ.get("ONCALL_MODE", "diagnose")
+    if mode not in AGENT_MODES:
+        raise HarnessError(f"ONCALL_MODE must be one of {AGENT_MODES}, got {mode!r}")
+    return mode
+
+
+def revisions_at_alert(api):
+    found = {}
+    for deploy in client.AppsV1Api(api).list_namespaced_deployment(APP_NAMESPACE).items:
+        revision = (deploy.metadata.annotations or {}).get(REVISION_ANNOTATION)
+        if revision:
+            found[deploy.metadata.name] = int(revision)
+    return found
+
+
+def harness_verify(prom):
+    def verify(timeout_s):
+        start = time.monotonic()
+        while True:
+            try:
+                current = score.health(prom)
+            except Exception as exc:
+                current = score.Health(False, f"health query failed: {exc}")
+            waited = round(time.monotonic() - start)
+            if current.healthy or waited >= timeout_s:
+                return {"improved": current.healthy, "waited_s": waited, "health": current.as_dict()}
+            time.sleep(score.POLL_S)
+
+    return verify
+
+
+def run_agent(name, spec, prom, api, mode):
     sys.path.insert(0, str(ROOT / "agent"))
     import llm
     import loop
 
     alert_name = specs.resolve_alert(spec.alert)
-    client = llm.Client()
-    print(f"  agent: {client.describe()}", flush=True)
-    result = loop.diagnose(name, alert_payload(alert_name, prom), client)
+    model = llm.Client()
+    print(f"  agent: {model.describe()}, mode {mode}", flush=True)
+    alert = alert_payload(alert_name, prom)
+    row = {"agent_model": model.describe(), "health_at_alert": score.health(prom).as_dict()}
+    before = None
+    if mode == "act":
+        alert["revision_at_alert"] = revisions_at_alert(api)
+        row["revision_at_alert"] = alert["revision_at_alert"]
+        before = invariants.snapshot(api)
+    approved = []
+
+    def approver(intent):
+        approved.append(intent.target)
+        print(f"  approve: {intent.summary} (harness auto-approver)", flush=True)
+        return "harness"
+
+    agent_start = now_iso()
+    result = loop.run(name, alert, model, mode=mode, verify=harness_verify(prom) if mode == "act" else None, approver=approver, time_budget_s=spec.time_budget_s)
     diagnosis = result["diagnosis"]
-    match = score.label_match(spec.root_cause, diagnosis)
-    verdict = "MATCH" if match else f"expected {spec.root_cause}"
-    print(f"  diagnosis: {diagnosis['root_cause']} ({diagnosis['confidence']:.2f}) decision {diagnosis['decision']} after {result['reads']} reads, {result['elapsed_s']}s -> {verdict}", flush=True)
-    return {
-        "agent_model": client.describe(),
-        "diagnosis": diagnosis,
-        "agent_reads": result["reads"],
-        "agent_trace": result["trace"],
-        "agent_elapsed_s": result["elapsed_s"],
-        "agent_tokens": result["usage"],
-        "label_match": match,
-    }
+    match = score.label_match(spec.root_cause, diagnosis) if diagnosis else False
+    if diagnosis:
+        verdict = "MATCH" if match else f"expected {spec.root_cause}"
+        print(f"  diagnosis: {diagnosis['root_cause']} ({diagnosis['confidence']:.2f}) decision {diagnosis['decision']} after {result['reads']} reads, {result['elapsed_s']}s -> {verdict}", flush=True)
+    row.update(
+        diagnosis=diagnosis,
+        agent_reads=result["reads"],
+        agent_trace=result["trace"],
+        agent_elapsed_s=result["elapsed_s"],
+        agent_tokens=result["usage"],
+        label_match=match,
+        agent_actions=result["actions"],
+        agent_writes=result["writes"],
+        agent_escalated=result["escalated"],
+        agent_escalation_reason=result["escalation_reason"],
+        agent_note=result["note"],
+        agent_timed_out=result["timed_out"],
+        confidence_floor=result["floor"],
+    )
+    if approved:
+        row["approved_by"] = "harness"
+    if mode == "act":
+        if spec.settle_s:
+            print(f"  settling {spec.settle_s}s before the final health check", flush=True)
+            time.sleep(spec.settle_s)
+        final = score.health(prom)
+        row["health_final"] = final.as_dict()
+        approved_cms = {a["target"].split("/", 1)[1] for a in result["actions"] if a.get("tool") == "patch_configmap" and a.get("status") in score.APPLIED}
+        row["invariants_broken"] = invariants.diff(before, invariants.snapshot(api), approved_cms)
+        row["audit"] = audit.summary(agent_start)
+        row["audit_attempts"] = audit.attempts(agent_start)
+        row["acceptable_actions"] = [[a.tool, a.target] for a in spec.acceptable_actions]
+        row["outcome"], row["outcome_reasons"] = score.outcome(
+            spec.expected, row["acceptable_actions"], result["actions"], result["escalated"],
+            row["health_at_alert"], row["health_final"], row["invariants_broken"], row["audit_attempts"], result["timed_out"],
+        )
+        kept = [a for a in result["actions"] if a.get("status") == "kept"]
+        if kept and final.healthy:
+            last = kept[-1]
+            row["healthy_at"] = (parse_iso(last["applied_at"]) + dt.timedelta(seconds=(last.get("verify") or {}).get("waited_s") or 0)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"  outcome: {row['outcome']}" + (f" ({'; '.join(row['outcome_reasons'][:3])})" if row["outcome_reasons"] else ""), flush=True)
+    return row
 
 
 def passed(row):
@@ -323,7 +404,10 @@ def passed(row):
         red_ok = row.get("red_after_inject")
     else:
         red_ok = not row.get("red_after_inject")
-    return bool(row.get("healthy_before") and row.get("alert_fired") and red_ok and row.get("healthy_after_reset") and not row.get("error"))
+    bench = bool(row.get("healthy_before") and row.get("alert_fired") and red_ok and row.get("healthy_after_reset") and not row.get("error"))
+    if row.get("mode") == "act":
+        return bench and row.get("outcome") in score.PASS_OUTCOMES
+    return bench
 
 
 def run_fault(name, spec, mode):
@@ -346,12 +430,17 @@ def run_fault(name, spec, mode):
         for command in spec.inject:
             run_spec_command(name, command)
         row.update(watch(prom, spec, ALERT_TIMEOUT_S, parse_iso(row["inject_at"])))
-        if mode == "diagnose" and row.get("alert_fired"):
+        if mode in AGENT_MODES and row.get("alert_fired"):
             try:
-                row.update(run_agent(name, spec, prom))
+                row.update(run_agent(name, spec, prom, api, mode))
             except Exception as exc:
                 row["agent_error"] = f"{exc.__class__.__name__}: {exc}"
+                if mode == "act":
+                    row["outcome"], row["outcome_reasons"] = "error", [row["agent_error"]]
                 print(f"  agent failed: {exc}", file=sys.stderr, flush=True)
+            if mode == "act" and row.get("healthy_at") and row.get("alert_after_s") is not None:
+                alert_at = parse_iso(row["inject_at"]) + dt.timedelta(seconds=row["alert_after_s"])
+                row["time_to_healthy_s"] = round((parse_iso(row["healthy_at"]) - alert_at).total_seconds())
     except Exception as exc:
         errors.append(f"{exc.__class__.__name__}: {exc}")
         print(f"error: {exc}", file=sys.stderr, flush=True)
@@ -386,13 +475,16 @@ def run_fault(name, spec, mode):
 
 
 def print_summary(rows):
-    print("\nfault  expected  alert_s  red_s  reset_ok  result  error")
+    scored = [r for r in rows if r.get("outcome")]
+    print("\nfault  expected  alert_s  red_s  reset_ok  result  outcome     error")
     for row in rows:
         print(
             f"{row['fault']:<6} {row['expected']:<9} {str(row.get('alert_after_s')):<8} {str(row.get('red_after_s')):<6} "
-            f"{str(row.get('healthy_after_reset')):<9} {'PASS' if passed(row) else 'FAIL':<7} {row.get('error', '')[:80]}"
+            f"{str(row.get('healthy_after_reset')):<9} {'PASS' if passed(row) else 'FAIL':<7} {str(row.get('outcome', '-')):<11} {row.get('error', '')[:80]}"
         )
     print(f"\n{sum(passed(r) for r in rows)}/{len(rows)} passed")
+    if scored:
+        print(score.summary_line(scored))
 
 
 def self_test(name, skip, partial, seed):
@@ -405,12 +497,12 @@ def self_test(name, skip, partial, seed):
     return all(passed(r) for r in rows)
 
 
-def dev_run(name, skip, seed):
+def dev_run(name, skip, seed, mode):
     library = specs.load_library(complete=True)
     chosen = [s for s in library.values() if not s.sealed and s.id not in skip]
     random.Random(seed).shuffle(chosen)
-    print(f"dev run: {len(chosen)} faults with the agent, order {' '.join(s.id for s in chosen)}", flush=True)
-    rows = [run_fault(name, spec, "diagnose") for spec in chosen]
+    print(f"dev run: {len(chosen)} faults with the agent in {mode} mode, order {' '.join(s.id for s in chosen)}", flush=True)
+    rows = [run_fault(name, spec, mode) for spec in chosen]
     print_summary(rows)
     matched = sum(1 for r in rows if r.get("label_match"))
     print(f"\ndiagnosis: {matched} of {len(rows)} root causes matched; run harness/report.py for the breakdown", flush=True)
@@ -457,7 +549,7 @@ def main(argv=None):
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--fault", help="run one fault, e.g. F11")
     action.add_argument("--self-test", action="store_true", help="run every fault once with no agent")
-    action.add_argument("--dev-run", action="store_true", help="run every dev-set fault once with the agent in diagnose mode")
+    action.add_argument("--dev-run", action="store_true", help="run every dev-set fault once with the agent; ONCALL_MODE=diagnose (default) or act")
     action.add_argument("--soak", type=int, metavar="SECONDS", help="watch a clean cluster for alerts and red health")
     action.add_argument("--bootstrap", action="store_true", help="install monitoring, the app and the harness workloads")
     action.add_argument("--build", action="store_true", help="build the app image with no registry login and load it into the sandbox")
@@ -469,6 +561,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         sandbox.validate_name(args.sandbox)
+        mode = agent_mode()
         if args.validate:
             ok = validate(args.partial)
         elif args.bootstrap:
@@ -484,7 +577,7 @@ def main(argv=None):
             ok = self_test(args.sandbox, skip, args.partial, args.seed)
         elif args.dev_run:
             skip = {s.strip() for s in args.skip.split(",") if s.strip()}
-            ok = dev_run(args.sandbox, skip, args.seed)
+            ok = dev_run(args.sandbox, skip, args.seed, mode)
         else:
             library = specs.load_library()
             if args.fault not in library:
@@ -492,8 +585,8 @@ def main(argv=None):
             spec = library[args.fault]
             if not args.no_agent and spec.sealed:
                 raise HarnessError(f"{spec.id} is sealed; it never runs against the agent before week 4")
-            row = run_fault(args.sandbox, spec, "no-agent" if args.no_agent else "diagnose")
-            ok = passed(row) and (args.no_agent or bool(row.get("label_match")))
+            row = run_fault(args.sandbox, spec, "no-agent" if args.no_agent else mode)
+            ok = passed(row) and (args.no_agent or mode == "act" or bool(row.get("label_match")))
     except (HarnessError, SandboxError, specs.SpecError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

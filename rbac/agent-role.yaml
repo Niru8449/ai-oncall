@@ -56,6 +56,42 @@ subjects:
     namespace: storefront
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: oncall-agent-write
+  namespace: storefront
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale]
+    verbs: [patch, update]
+  - apiGroups: [""]
+    resources: [services, configmaps]
+    verbs: [patch, update]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [patch, update]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: oncall-agent-write
+  namespace: storefront
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: oncall-agent-write
+subjects:
+  - kind: ServiceAccount
+    name: oncall-agent
+    namespace: storefront
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: oncall-agent-nodes-read
@@ -63,6 +99,10 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [storefront]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
