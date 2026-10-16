@@ -228,7 +228,7 @@ def run(sandbox_name, alert, client, mode="diagnose", floor=None, verify=None, a
                 gate.escalate(f"confidence {diagnosis['confidence']} is below the floor {floor}: " + "; ".join(diagnosis["evidence"][:3]))
             else:
                 result.update(session.act(diagnosis, gate, acts))
-            result.update(actions=gate.actions, writes=gate.writes, escalated=gate.escalation is not None, escalation_reason=gate.escalation)
+            result.update(actions=gate.actions, writes=gate.writes, escalated=gate.escalation is not None, escalation_reason=gate.escalation, health_before_writes=gate.health_before_writes)
         else:
             if diagnosis["decision"] in ("fix", "propose") and diagnosis.get("action"):
                 action = diagnosis["action"] if isinstance(diagnosis["action"], dict) else {"tool": str(diagnosis["action"])}

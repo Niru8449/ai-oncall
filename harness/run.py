@@ -371,6 +371,7 @@ def run_agent(name, spec, prom, api, mode):
         agent_note=result["note"],
         agent_timed_out=result["timed_out"],
         confidence_floor=result["floor"],
+        health_before_writes=result.get("health_before_writes"),
     )
     if approved:
         row["approved_by"] = "harness"
@@ -387,7 +388,7 @@ def run_agent(name, spec, prom, api, mode):
         row["acceptable_actions"] = [[a.tool, a.target] for a in spec.acceptable_actions]
         row["outcome"], row["outcome_reasons"] = score.outcome(
             spec.expected, row["acceptable_actions"], result["actions"], result["escalated"],
-            row["health_at_alert"], row["health_final"], row["invariants_broken"], row["audit_attempts"], result["timed_out"],
+            row.get("health_before_writes") or row["health_at_alert"], row["health_final"], row["invariants_broken"], row["audit_attempts"], result["timed_out"],
         )
         kept = [a for a in result["actions"] if a.get("status") == "kept"]
         if kept and final.healthy:
@@ -410,9 +411,11 @@ def passed(row):
     return bench
 
 
-def run_fault(name, spec, mode):
+def run_fault(name, spec, mode, sealed_run=False):
     print(f"\n=== {spec.id} {spec.title} (expected {spec.expected}) ===", flush=True)
     row = {"ts": now_iso(), "sandbox": name, "fault": spec.id, "mode": mode, "expected": spec.expected, "customer_impact": spec.customer_impact, "healthy_before": False}
+    if sealed_run:
+        row["sealed_run"] = True
     errors = []
     start = time.monotonic()
     try:
@@ -487,12 +490,46 @@ def print_summary(rows):
         print(score.summary_line(scored))
 
 
-def self_test(name, skip, partial, seed):
+def self_test(name, skip, partial, seed, only=None, category=None):
     library = specs.load_library(complete=not partial)
-    chosen = [s for s in library.values() if s.id not in skip]
+    if only:
+        unknown = sorted(only - set(library))
+        if unknown:
+            raise HarnessError(f"--only names unknown faults: {' '.join(unknown)}")
+    chosen = [s for s in library.values() if s.id not in skip and (not only or s.id in only) and (not category or s.category == category)]
+    if not chosen:
+        raise HarnessError("no faults left to run after --only, --category and --skip")
     random.Random(seed).shuffle(chosen)
     print(f"self-test: {len(chosen)} faults, order {' '.join(s.id for s in chosen)}", flush=True)
     rows = [run_fault(name, spec, "self-test") for spec in chosen]
+    print_summary(rows)
+    return all(passed(r) for r in rows)
+
+
+def sealed_faults_seen(sealed_ids):
+    seen = []
+    for path in sorted(RUNS_DIR.glob("*.jsonl")):
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("fault") in sealed_ids and row.get("mode") in AGENT_MODES and not row.get("sealed_run"):
+                seen.append(f"{row['fault']} met the agent on {row.get('ts', '?')[:10]} in {row['mode']} mode ({path.name})")
+    return seen
+
+
+def sealed_run(name, skip, seed, mode):
+    if mode != "act":
+        raise HarnessError("the sealed run needs ONCALL_MODE=act; the sealed faults are run once, cold, with writes on")
+    library = specs.load_library(complete=True)
+    sealed = [s for s in library.values() if s.sealed]
+    seen = sealed_faults_seen({s.id for s in sealed})
+    if seen:
+        raise HarnessError("refusing the sealed run, the agent has already seen a sealed fault:\n  " + "\n  ".join(seen))
+    chosen = [s for s in sealed if s.id not in skip]
+    random.Random(seed).shuffle(chosen)
+    print(f"sealed run: {len(chosen)} sealed faults in act mode, order {' '.join(s.id for s in chosen)}", flush=True)
+    rows = [run_fault(name, spec, mode, sealed_run=True) for spec in chosen]
     print_summary(rows)
     return all(passed(r) for r in rows)
 
@@ -550,14 +587,17 @@ def main(argv=None):
     action.add_argument("--fault", help="run one fault, e.g. F11")
     action.add_argument("--self-test", action="store_true", help="run every fault once with no agent")
     action.add_argument("--dev-run", action="store_true", help="run every dev-set fault once with the agent; ONCALL_MODE=diagnose (default) or act")
+    action.add_argument("--sealed-run", action="store_true", help="run the sealed faults once with the agent in act mode; refused if any sealed fault has met the agent before")
     action.add_argument("--soak", type=int, metavar="SECONDS", help="watch a clean cluster for alerts and red health")
     action.add_argument("--bootstrap", action="store_true", help="install monitoring, the app and the harness workloads")
     action.add_argument("--build", action="store_true", help="build the app image with no registry login and load it into the sandbox")
     action.add_argument("--validate", action="store_true", help="load and validate the fault library")
     parser.add_argument("--no-agent", action="store_true", help="inject and confirm only, no agent")
-    parser.add_argument("--skip", default="", help="comma-separated fault ids to leave out of --self-test or --dev-run")
+    parser.add_argument("--skip", default="", help="comma-separated fault ids to leave out of --self-test, --dev-run or --sealed-run")
+    parser.add_argument("--only", default="", help="comma-separated fault ids to run in --self-test (CI smoke)")
+    parser.add_argument("--category", default=None, help="run only this category in --self-test (CI nightly)")
     parser.add_argument("--partial", action="store_true", help="allow a library with fewer than 50 specs")
-    parser.add_argument("--seed", type=int, default=None, help="shuffle seed for --self-test")
+    parser.add_argument("--seed", type=int, default=None, help="shuffle seed for the multi-fault runs")
     args = parser.parse_args(argv)
     try:
         sandbox.validate_name(args.sandbox)
@@ -574,10 +614,14 @@ def main(argv=None):
             ok = soak(args.sandbox, args.soak)
         elif args.self_test:
             skip = {s.strip() for s in args.skip.split(",") if s.strip()}
-            ok = self_test(args.sandbox, skip, args.partial, args.seed)
+            only = {s.strip() for s in args.only.split(",") if s.strip()}
+            ok = self_test(args.sandbox, skip, args.partial, args.seed, only, args.category)
         elif args.dev_run:
             skip = {s.strip() for s in args.skip.split(",") if s.strip()}
             ok = dev_run(args.sandbox, skip, args.seed, mode)
+        elif args.sealed_run:
+            skip = {s.strip() for s in args.skip.split(",") if s.strip()}
+            ok = sealed_run(args.sandbox, skip, args.seed, mode)
         else:
             library = specs.load_library()
             if args.fault not in library:

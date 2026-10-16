@@ -30,6 +30,7 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 ROLLOUT_TIMEOUT = "1200s"
 NODE_CPUS = "2"
+NODE_COUNTS = (1, 3)
 REGISTRY_HOST = "localhost:5000"
 CONTAINERD_CONFIG = "/etc/containerd/config.toml"
 CERTS_DIR = "/etc/containerd/certs.d"
@@ -135,8 +136,13 @@ def kind_clusters():
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def render_kind_config(name):
+def render_kind_config(name, nodes=None):
     cfg = yaml.safe_load(KIND_TEMPLATE.read_text())
+    if nodes is not None:
+        if nodes not in NODE_COUNTS:
+            raise SandboxError(f"--nodes must be one of {NODE_COUNTS}")
+        workers = [n for n in cfg["nodes"] if n.get("role") == "worker"]
+        cfg["nodes"] = [n for n in cfg["nodes"] if n.get("role") != "worker"] + workers[: nodes - 1]
     for node in cfg.get("nodes", []):
         for mount in node.get("extraMounts") or []:
             host = Path(mount["hostPath"])
@@ -264,7 +270,7 @@ def install_agent(name):
     return True
 
 
-def create(name):
+def create(name, nodes=None):
     validate_name(name)
     if name in kind_clusters():
         raise SandboxError(f"kind already has a cluster named {name!r}; pick another name or run: python harness/sandbox.py delete {name}")
@@ -273,7 +279,7 @@ def create(name):
         raise SandboxError(f"{folder} exists but kind has no cluster {name!r}; remove that folder by hand if it is stale")
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     folder.mkdir(parents=True)
-    rendered = render_kind_config(name)
+    rendered = render_kind_config(name, nodes)
     kubeconfig = kubeconfig_path(name)
     try:
         sh(["kind", "create", "cluster", "--name", name, "--config", str(rendered), "--kubeconfig", str(kubeconfig)])
@@ -347,13 +353,19 @@ def main(argv=None):
     for command, help_text in (
         ("create", "create a kind sandbox with Calico, namespaces and the oncall-sandbox marker"),
         ("check", "run the four safety checks against a sandbox"),
-        ("agent", "create or refresh the agent's read-only identity and agent.kubeconfig"),
+        ("agent", "create or refresh the agent's identity and agent.kubeconfig"),
         ("delete", "delete a sandbox this script created"),
     ):
-        sub.add_parser(command, help=help_text).add_argument("name")
+        command_parser = sub.add_parser(command, help=help_text)
+        command_parser.add_argument("name")
+        if command == "create":
+            command_parser.add_argument("--nodes", type=int, default=None, help="1 for a single-node sandbox (CI); default is the 3 nodes in cluster/kind-config.yaml")
     args = parser.parse_args(argv)
     try:
-        ok = {"create": create, "check": check, "agent": agent, "delete": delete}[args.command](args.name)
+        if args.command == "create":
+            ok = create(args.name, args.nodes)
+        else:
+            ok = {"check": check, "agent": agent, "delete": delete}[args.command](args.name)
     except SandboxError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

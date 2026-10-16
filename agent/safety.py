@@ -155,6 +155,7 @@ class Gate:
         self.actions = []
         self.writes = 0
         self.escalation = None
+        self.health_before_writes = None
 
     @property
     def budget_left(self):
@@ -201,6 +202,8 @@ class Gate:
         ok, changed, disallowed, error = self._dry_run(intent)
         if not ok:
             return self._record(**base, status="refused", reason="dry-run", detail=error, changed=changed, disallowed=disallowed)
+        if self.writes == 0 and self.verify:
+            self.health_before_writes = (self.verify(0) or {}).get("health")
         self.writes += 1
         applied_at = now_iso()
         rc, out, err = self._apply(intent)

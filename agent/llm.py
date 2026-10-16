@@ -38,10 +38,9 @@ class ScriptedClient:
 
     def chat(self, messages, tools=None, temperature=0):
         self.calls += 1
-        offered = {t["function"]["name"] for t in tools or []}
         while self.steps:
             step = self.steps[0]
-            if "tool" in step and step["tool"] not in offered:
+            if "tool" in step and not tools:
                 self.steps.pop(0)
                 continue
             self.steps.pop(0)

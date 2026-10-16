@@ -4,3 +4,4 @@ __pycache__/
 reports/audit/
 reports/runs/
 .DS_Store
+scripts/check_history.sh

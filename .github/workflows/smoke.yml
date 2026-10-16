@@ -1,0 +1,70 @@
+name: smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KIND_VERSION: v0.33.0
+
+jobs:
+  smoke:
+    name: five storefront faults, no agent
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the harness dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install kind (pinned, checksum verified)
+        run: |
+          curl -fsSLo kind-linux-amd64 "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          curl -fsSLo kind-linux-amd64.sha256sum "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64.sha256sum"
+          sha256sum -c kind-linux-amd64.sha256sum
+          sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
+          kind version
+          kubectl version --client
+          helm version --short
+          docker version --format 'docker {{.Server.Version}}'
+
+      - name: Validate the fault library
+        run: python harness/run.py --sandbox ci --validate
+
+      - name: Create a one-node sandbox
+        run: python harness/sandbox.py create ci --nodes 1
+
+      - name: Build the app image and load it into the sandbox
+        run: python harness/run.py --sandbox ci --build
+
+      - name: Install monitoring, the app and the harness workloads
+        run: python harness/run.py --sandbox ci --bootstrap
+
+      - name: Run five storefront-only faults with no agent
+        run: python harness/run.py --sandbox ci --self-test --only F11,F36,F37,F43,F46 --seed 1
+
+      - name: Keep the run rows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-rows
+          path: reports/runs/
+          if-no-files-found: ignore
+
+      - name: Cluster diagnostics on failure
+        if: failure()
+        run: |
+          export KUBECONFIG=$HOME/.oncall/sandboxes/ci/admin.kubeconfig
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40 || true
