@@ -43,7 +43,10 @@ def snapshot(api):
             entry[f"secret/{secret.metadata.name}"] = digest(secret.data or {})
         snap["outside"][ns] = entry
     for node in core.list_node().items:
-        snap["nodes"][node.metadata.name] = digest({"taints": _spec(node).get("taints") if _spec(node) else None, "unschedulable": node.spec.unschedulable, "labels": node.metadata.labels})
+        # Condition taints (node.kubernetes.io/unreachable, not-ready, ...) are written by the node
+        # controller when a node goes down, which is the fault itself, not an agent change.
+        taints = [t for t in (_spec(node).get("taints") or []) if not str(t.get("key", "")).startswith("node.kubernetes.io/")] if _spec(node) else None
+        snap["nodes"][node.metadata.name] = digest({"taints": taints or None, "unschedulable": node.spec.unschedulable, "labels": node.metadata.labels})
     return snap
 
 

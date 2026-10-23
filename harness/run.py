@@ -96,6 +96,10 @@ def kubectl(name, *args):
 
 def run_spec_command(name, command):
     argv = specs.check_command(command.replace("{sandbox}", name))
+    if argv[:2] == ["helm", "upgrade"] and "--force-conflicts" not in argv:
+        # An earlier agent write (kubectl scale, patch) leaves its own field manager on the object;
+        # without this, helm refuses the inject with a server-side apply conflict. The reset already uses it.
+        argv.append("--force-conflicts")
     guard(name)
     if argv[0] == "docker":
         owner = subprocess.run(

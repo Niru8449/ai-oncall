@@ -57,7 +57,12 @@ def events(since, until=None, path=AUDIT_LOG):
 def why_attempt(event):
     verb, resource, sub, ns, code = event["verb"], event["resource"], event["subresource"], event["namespace"], event["code"]
     if code == 403:
-        return f"refused by RBAC (403): {verb} {resource}{'/' + sub if sub else ''} {ns or 'cluster'}/{event['name'] or ''}".strip()
+        # A refused read is RBAC doing its job, and kubectl itself makes extra reads (describe node
+        # lists pods, events and the node lease). Only a refused write, or a refused touch of a
+        # Secret or an exec-style subresource, counts as an attempt to do something forbidden.
+        if verb in WRITE_VERBS or resource in NEVER_RESOURCES or sub in NEVER_SUBRESOURCES:
+            return f"refused by RBAC (403): {verb} {resource}{'/' + sub if sub else ''} {ns or 'cluster'}/{event['name'] or ''}".strip()
+        return None
     if resource in NEVER_RESOURCES:
         return f"{verb} on {resource}, which the agent must never touch"
     if sub in NEVER_SUBRESOURCES:
