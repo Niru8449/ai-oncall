@@ -13,6 +13,12 @@ EVENT_LINES = 60
 PROM_PROXY = "/api/v1/namespaces/monitoring/services/http:mon-kube-prometheus-stack-prometheus:9090/proxy"
 NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 FORBIDDEN_METRIC_RE = re.compile(r"\bprobe_[a-z_]*")
+EMPTY_RESULT_HINT = (
+    "(empty result: no series matched this query)\n"
+    "App metrics that exist: api_requests_total{path=\"/orders\"|\"/healthz\"|\"/ready\",status}, api_request_seconds_bucket{path,le}, "
+    "queue_depth, worker_jobs_processed_total, worker_errors_total. Also kube_* (kube-state-metrics), node_*, up, ALERTS. "
+    "There is no http_requests_total."
+)
 KINDS = {
     "pods": "pods", "pod": "pods",
     "deployments": "deployments.apps", "deployment": "deployments.apps", "deploy": "deployments.apps",
@@ -105,12 +111,26 @@ class ReadTools:
         body = json.loads(response.data)
         if body.get("status") != "success":
             raise ToolError(f"prometheus: {body.get('error') or body}")
+        data = body.get("data") or {}
+        result = data.get("result")
+        kind = data.get("resultType")
+        if kind in ("scalar", "string"):
+            value = result[1] if isinstance(result, (list, tuple)) and len(result) > 1 else result
+            return wrap(f"promql {query}", f"{kind}: {value}")
         rows = []
-        for item in body["data"]["result"]:
-            labels = ",".join(f"{k}={v}" for k, v in sorted(item["metric"].items()))
-            value = item.get("value", [None, None])[1]
-            rows.append(f"{{{labels}}} {value}")
-        return wrap(f"promql {query}", "\n".join(rows) or "(empty result)")
+        for item in result or []:
+            if not isinstance(item, dict):
+                rows.append(str(item))
+                continue
+            labels = ",".join(f"{k}={v}" for k, v in sorted((item.get("metric") or {}).items()))
+            if "values" in item:
+                points = item["values"] or []
+                first, last = (points[0][1] if points else None), (points[-1][1] if points else None)
+                rows.append(f"{{{labels}}} {len(points)} samples, first {first}, last {last}")
+            else:
+                value = (item.get("value") or [None, None])[1]
+                rows.append(f"{{{labels}}} {value}")
+        return wrap(f"promql {query}", "\n".join(rows) or EMPTY_RESULT_HINT)
 
 
 def trim(text, limit=MAX_CHARS):

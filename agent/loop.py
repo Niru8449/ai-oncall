@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -29,10 +30,17 @@ def parse_diagnosis(text):
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end < start:
         raise DiagnosisError("no JSON object in the reply")
+    raw = text[start:end + 1]
     try:
-        data = json.loads(text[start:end + 1])
+        data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise DiagnosisError(f"diagnosis is not valid JSON: {exc}")
+        try:
+            # Models sometimes leave a trailing comma before a closing bracket; accept that one slip.
+            data = json.loads(re.sub(r",\s*([}\]])", r"\1", raw))
+        except json.JSONDecodeError:
+            raise DiagnosisError(f"diagnosis is not valid JSON: {exc}")
+    if not isinstance(data, dict):
+        raise DiagnosisError("diagnosis is not a JSON object")
     root_cause = data.get("root_cause")
     if root_cause not in LABELS:
         raise DiagnosisError(f"root_cause {root_cause!r} is not in labels.txt")
@@ -61,6 +69,8 @@ def _assistant_message(message):
     kept = {"role": "assistant", "content": message.get("content") or ""}
     if message.get("tool_calls"):
         kept["tool_calls"] = message["tool_calls"]
+    if message.get("blocks"):
+        kept["blocks"] = message["blocks"]
     return kept
 
 
@@ -87,6 +97,9 @@ class Session:
         self.start = time.monotonic()
         self.deadline = self.start + time_budget_s
         system = SYSTEM + ("\n\n" + ACT_RULES if mode == "act" else "")
+        # One fixed tool set for the whole session: the model's thinking blocks are bound to the
+        # system prompt and the tool set, so changing either between turns invalidates them.
+        self.tools = list(read.TOOL_SPECS) + (list(act.CONTROL_SPECS) + list(act.TOOL_SPECS) if mode == "act" else [])
         self.messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": "Alert received:\n" + json.dumps(alert, indent=2) + "\n\nInvestigate with the tools, then answer with the diagnosis JSON only."},
@@ -126,7 +139,7 @@ class Session:
         for _ in range(MAX_TURNS):
             if not self.time_left:
                 raise TimeoutExceeded("time budget used up before a diagnosis")
-            message = self.chat(read.TOOL_SPECS if self.reads_left else None)
+            message = self.chat(self.tools)
             calls = message.get("tool_calls") or []
             if not calls:
                 return parse_diagnosis(message.get("content"))
@@ -154,12 +167,7 @@ class Session:
             if not writes_open and not nudged:
                 self.messages.append({"role": "user", "content": "Your write or time budget is used up. Call escalate(reason) or finish(summary) now."})
                 nudged = True
-            tools = list(act.CONTROL_SPECS)
-            if writes_open:
-                tools += act.TOOL_SPECS
-            if self.reads_left and self.time_left:
-                tools += read.TOOL_SPECS
-            message = self.chat(tools)
+            message = self.chat(self.tools)
             calls = message.get("tool_calls") or []
             if not calls:
                 return {"note": (message.get("content") or "").strip() or None}
