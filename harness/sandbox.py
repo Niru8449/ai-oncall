@@ -23,7 +23,9 @@ AGENT_RBAC = ROOT / "rbac" / "agent-role.yaml"
 AGENT_NAMESPACE = "storefront"
 AGENT_TOKEN_SECRET = "oncall-agent-token"
 AGENT_TOKEN_TIMEOUT_S = 30
-NAMESPACES = ("storefront", "harness", "external")
+# monitoring is created here too: rbac/agent-role.yaml puts the agent's Prometheus-proxy Role in it,
+# and install_agent() runs before helm installs monitoring (helm's --create-namespace tolerates it).
+NAMESPACES = ("storefront", "harness", "external", "monitoring")
 MARKER_NAMESPACE = "storefront"
 MARKER_NAME = "oncall-sandbox"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
