@@ -60,7 +60,9 @@ jobs:
         run: python harness/run.py --sandbox ci --bootstrap
 
       - name: Run five storefront-only faults with no agent
-        run: python harness/run.py --sandbox ci --self-test --only F11,F36,F37,F43,F46 --seed 1
+        # Faults whose alert fires within a minute on a slow one-node runner. F11 (memory growth)
+        # and F46 (queue fill) depend on timing the shared runner cannot keep; they stay in the nightly.
+        run: python harness/run.py --sandbox ci --self-test --only F19,F24,F36,F37,F43 --seed 1
 
       - name: Keep the run rows
         if: always()
