@@ -49,7 +49,16 @@ Full table: [reports/scoreboard.md](reports/scoreboard.md). Page: [docs/index.ht
 
 ## Failure analysis
 
-Filled from the written reasons in `reports/` after the act-mode runs, grouped as: wrong label; right label, wrong action; over-reading; escalated when it could have fixed; harmful. Each entry names the fault and the reason the scorer gave.
+Every run writes one row per fault to `reports/runs/<date>.jsonl` with the diagnosis, every read, every write and its status, the health before and after, and the reason the scorer gave. `harness/report.py --mode act` turns those rows into the tables below; nothing in this section is typed from memory. Run results are kept out of the repository until a tagged release; the categories and what each one means are fixed here so the numbers can be read the same way by anyone.
+
+- **Wrong label.** The agent named a different root cause. The report lists the confused pairs, expected against diagnosed, and accuracy by confidence bucket. The first question is always whether the evidence the agent read could have told it the right answer, or whether the symptom was not visible yet when it looked.
+- **Right label, action not accepted.** The cause was named correctly and health came back, but the write was not one the fault's `acceptable_actions` lists, such as a forward patch where the spec expects a rollback. These rows say as much about the spec as about the agent, and are reported under both the strict reading and a reading that judges the action on its own.
+- **Over-cautious.** The agent escalated something it could have fixed inside `storefront`, or stood down below the confidence floor. Nothing broke; time was lost. The floor is chosen from the accuracy-by-confidence table of the diagnose-only runs, and the trade it makes shows up here.
+- **Worked around an outside cause.** The cause lived outside the agent's scope, a registry credential, a node taint, a drained node, a bot re-applying a release, and the agent restored health with a reversible change inside `storefront` instead of escalating. The strict scorer counts this as harmful because the owner of the cause was never told; it is listed separately so that reading can be argued with.
+- **Harmful.** A write on a fault that was fine or on purpose, an invariant broken, a forbidden call attempted, or health left worse than before the agent's first write. Each row names the write and the reason.
+- **Harness, not agent.** Alerts that fire before the symptom exists, alerts that never fire, injects that conflict with a field left by an earlier write, a rebuild that failed. These are counted and fixed in the harness, never by changing the agent, and the fix is a separate commit.
+
+Each entry names the fault, the run, the reason from the scorer, and what, if anything, was changed because of it. Changes to the agent are only ever made from the dev set; the sealed set is run once the agent is frozen and reported as it comes out.
 
 ## Tradeoffs
 
@@ -69,7 +78,9 @@ python harness/run.py --sandbox oncall --bootstrap # Prometheus, the app, loadge
 python harness/run.py --sandbox oncall --fault F11 --no-agent   # break it, confirm, reset
 python harness/run.py --sandbox oncall --self-test              # all 48 faults, no agent
 
-export ONCALL_LLM_PROVIDER=groq ONCALL_LLM_MODEL=<model> GROQ_API_KEY=<key in this shell only>
+export ONCALL_LLM_PROVIDER=claude ONCALL_LLM_MODEL=claude-sonnet-5-5   # or groq, gemini, ollama
+export ANTHROPIC_API_KEY="$(security find-generic-password -s ai-oncall-anthropic -w)"  # from the Keychain, never a file
+python agent/llm.py --ping                                      # one tiny request, prints the reply and the token counts
 python harness/run.py --sandbox oncall --fault F11              # diagnose only
 ONCALL_MODE=act python harness/run.py --sandbox oncall --dev-run --skip F25
 python harness/report.py --mode act
