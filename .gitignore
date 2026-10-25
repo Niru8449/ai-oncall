@@ -5,3 +5,5 @@ reports/audit/
 reports/runs/
 .DS_Store
 scripts/check_history.sh
+reports/scoreboard.md
+docs/index.html

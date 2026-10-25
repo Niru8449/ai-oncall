@@ -256,7 +256,7 @@ def main(argv=None):
     MD_PATH.write_text(markdown(summary, model, table))
     HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
     HTML_PATH.write_text(page(summary, model, table))
-    readme = update_readme(f"**{summary}**\n\n{model}\n\nFull table with traces: [reports/scoreboard.md](reports/scoreboard.md) · [docs/index.html](docs/index.html)")
+    readme = update_readme(f"**{summary}**\n\n{model}\n\nFull table with traces: [docs/index.html](docs/index.html)")
     print(summary)
     print(model)
     print(f"wrote {MD_PATH.relative_to(ROOT)}, {HTML_PATH.relative_to(ROOT)}" + (", README block" if readme else ""))
