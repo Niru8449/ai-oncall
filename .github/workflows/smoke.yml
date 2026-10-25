@@ -11,6 +11,8 @@ concurrency:
 
 env:
   KIND_VERSION: v0.33.0
+  HELM_VERSION: v4.3.0
+  HELM_SHA256: 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
 
 jobs:
   smoke:
@@ -35,6 +37,13 @@ jobs:
           sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
           kind version
           kubectl version --client
+
+      - name: Install helm 4 (pinned, checksum verified; the runner's helm 3 lacks --force-conflicts)
+        run: |
+          curl -fsSLo helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c
+          tar -xzf helm.tar.gz linux-amd64/helm
+          sudo install -m 0755 linux-amd64/helm /usr/local/bin/helm
           helm version --short
           docker version --format 'docker {{.Server.Version}}'
 
